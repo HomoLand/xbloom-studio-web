@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from bridge_client import is_running as bridge_is_running, status as bridge_status
+from bridge_client import is_running as bridge_is_running, status as bridge_status, events as bridge_events
 
 
 router = APIRouter(prefix="/api/device", tags=["device"])
@@ -101,3 +101,12 @@ async def bridge_state() -> dict[str, Any]:
             "hint": "start the bridge with: python scripts/xbloom.py bridge start",
         }
     return {"running": True, "available": True, **bridge_status()}
+
+
+@router.get("/events")
+def bridge_events_endpoint(since: int = Query(0)) -> dict[str, Any]:
+    """Poll bridge daemon events since a sequence number."""
+
+    if not bridge_is_running():
+        return {"running": False, "events": [], "next_since": since}
+    return bridge_events(since)

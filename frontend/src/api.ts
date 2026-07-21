@@ -55,6 +55,25 @@ export type BridgeState = {
   phase?: string;
   machine_state?: string | null;
   firmware?: string | null;
+  targets?: Record<string, unknown>;
+  telemetry?: Record<string, unknown>;
+  liquid_progress?: Record<string, unknown> | null;
+  last_operation?: Record<string, unknown> | null;
+  last_error?: string | null;
+  recovery_records?: string[];
+};
+
+export type BridgeEvent = {
+  seq: number;
+  state_name?: string;
+  command_code?: number;
+  [key: string]: unknown;
+};
+
+export type BridgeEventsResult = {
+  running: boolean;
+  events: BridgeEvent[];
+  next_since: number;
 };
 
 export type Template = {
@@ -187,6 +206,8 @@ export const api = {
   probe: (address?: string) =>
     get<ProbeResult>(`/device/probe${address ? `?address=${encodeURIComponent(address)}` : ""}`),
   bridge: () => get<BridgeState>("/device/bridge"),
+  bridgeEvents: (since = 0) =>
+    get<BridgeEventsResult>(`/device/events?since=${since}`),
   templates: () => get<TemplatesResult>("/recipes/templates"),
   validate: (path: string) => post<ValidateResult>("/recipes/validate", { path }),
   catalogStatus: () => get<CatalogStatus>("/catalog/status"),

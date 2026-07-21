@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, type BridgeState, type ScanResult, type ProbeResult } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type BridgeState, type BridgeEvent, type ScanResult, type ProbeResult } from "../api";
 
 type Summary = {
   templates: number;
@@ -14,6 +14,8 @@ export default function Dashboard() {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [events, setEvents] = useState<BridgeEvent[]>([]);
+  const eventSinceRef = useRef(0);
 
   const load = useCallback(async () => {
     setError(null);
@@ -39,6 +41,25 @@ export default function Dashboard() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const b = await api.bridge();
+        setBridge(b);
+        if (b.running) {
+          const ev = await api.bridgeEvents(eventSinceRef.current);
+          if (ev.events.length > 0) {
+            setEvents((prev) => [...ev.events, ...prev].slice(0, 50));
+          }
+          eventSinceRef.current = ev.next_since;
+        }
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, []);
+
   const doScan = async () => {
     setBusy("scan");
     setError(null);
@@ -62,6 +83,9 @@ export default function Dashboard() {
       setBusy(null);
     }
   };
+
+  const lp = bridge?.liquid_progress as Record<string, number | string | null> | null | undefined;
+  const tel = bridge?.telemetry as Record<string, number | string | null> | null | undefined;
 
   return (
     <div className="p-8 max-w-5xl">
@@ -113,6 +137,40 @@ export default function Dashboard() {
           )}
         </div>
       </section>
+
+      {bridge?.running && bridge.activity && bridge.activity !== "idle" && (
+        <section className="mb-6">
+          <h2 className="text-base font-medium mb-3">实时遥测</h2>
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
+            <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+              <Field label="活动" value={bridge.activity} />
+              <Field label="阶段" value={bridge.phase ?? "—"} />
+              <Field label="机器状态" value={bridge.machine_state ?? "—"} />
+              {tel?.water_ml != null && <Field label="注水量" value={`${tel.water_ml} ml`} />}
+              {tel?.coffee_g != null && <Field label="杯重" value={`${tel.coffee_g} g`} />}
+              {lp?.target_dispensed_water_ml != null && <Field label="目标水量" value={`${lp.target_dispensed_water_ml} ml`} />}
+              {lp?.dispensed_water_ml != null && <Field label="已注水" value={`${lp.dispensed_water_ml} ml`} />}
+              {lp?.remaining_ml != null && <Field label="剩余" value={`${lp.remaining_ml} ml`} />}
+              {lp?.cup_delta_g != null && <Field label="杯增量" value={`${lp.cup_delta_g} g`} />}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {bridge?.running && events.length > 0 && (
+        <section className="mb-6">
+          <h2 className="text-base font-medium mb-3">事件流（最近 {events.length} 条）</h2>
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 max-h-48 overflow-auto">
+            {events.map((ev) => (
+              <div key={ev.seq} className="text-xs text-white/50 py-0.5">
+                <span className="text-white/30">#{ev.seq}</span>{" "}
+                {ev.state_name ?? "event"}
+                {ev.command_code != null && <span className="text-white/30"> cmd={ev.command_code}</span>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="mb-6">
         <h2 className="text-base font-medium mb-3">设备发现</h2>
