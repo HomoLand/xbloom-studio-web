@@ -163,10 +163,7 @@ export default function Dashboard() {
           )}
           {!bridge?.running && (
             <div className="mt-4 pt-4 border-t border-white/10 text-xs text-white/40 leading-relaxed">
-              Bridge 未运行。启动它以获得持久 BLE 控制（暂停/恢复、实时遥测）：
-              <code className="ml-1 px-1.5 py-0.5 rounded bg-white/5 text-white/70">
-                python scripts/xbloom.py bridge start
-              </code>
+              Bridge 未运行。后端启动时会自动启动内置 Bridge，如未运行请检查后端日志。
             </div>
           )}
         </div>

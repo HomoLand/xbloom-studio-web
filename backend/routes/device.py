@@ -92,7 +92,7 @@ async def probe_machine(
 
 
 @router.get("/bridge")
-async def bridge_state() -> dict[str, Any]:
+def bridge_state() -> dict[str, Any]:
     """Report bridge daemon status. Does not start or connect the bridge."""
 
     if not bridge_is_running():
