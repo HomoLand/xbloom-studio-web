@@ -1,0 +1,7 @@
+# xbloom-studio-core provides the BLE protocol, recipe validation, catalog,
+# and history modules (xbloom_ble, xbloom_safety, xbloom_catalog, xbloom_history,
+# xbloom_paths). Install it editable from the Skill scripts directory:
+#   pip install -e skills/xbloom-studio-brew/scripts
+xbloom-studio-core==1.0.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
