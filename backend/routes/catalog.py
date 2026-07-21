@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile
 
 from xbloom_catalog import (
     CatalogError,
     catalog_summary,
     default_catalog_path,
     get_entry,
+    import_payload,
     list_entries,
     load_catalog,
+    save_catalog,
 )
 from xbloom_paths import skill_state_dir
 
@@ -60,3 +63,27 @@ def show_item(id: str = Query(...)) -> dict[str, Any]:
     except CatalogError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"entry": entry}
+
+
+@router.post("/import")
+async def import_recipes(file: UploadFile) -> dict[str, Any]:
+    """Import recipes from an uploaded JSON file into the private catalog."""
+
+    content = await file.read()
+    try:
+        payload = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON file: {exc}")
+
+    catalog, path = _load()
+    try:
+        result = import_payload(
+            catalog,
+            payload,
+            source_type="web-upload",
+            source_file=file.filename or "upload.json",
+        )
+        save_catalog(catalog, path)
+    except CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"path": str(path), **result}

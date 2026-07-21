@@ -149,6 +149,16 @@ export type CatalogEntryDetail = CatalogEntry & {
 
 export type CatalogShowResult = { entry: CatalogEntryDetail };
 
+export type CatalogImportResult = {
+  path: string;
+  candidates: number;
+  added: number;
+  updated: number;
+  rejected: number;
+  rejections: Array<{ index: number; name: string; error: string }>;
+  total: number;
+};
+
 export type HistoryStatus = {
   path: string;
   exists: boolean;
@@ -184,6 +194,14 @@ export const api = {
     get<CatalogListResult>(`/catalog/list${kind ? `?kind=${kind}` : ""}`),
   catalogShow: (id: string) =>
     get<CatalogShowResult>(`/catalog/show?id=${encodeURIComponent(id)}`),
+  catalogImport: async (file: File): Promise<CatalogImportResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/catalog/import`, { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(`${res.status}: ${data.detail ?? res.statusText}`);
+    return data as CatalogImportResult;
+  },
   historyStatus: () => get<HistoryStatus>("/history/status"),
   historyList: (limit = 20) => get<HistoryListResult>(`/history/list?limit=${limit}`),
 };

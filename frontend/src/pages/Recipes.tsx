@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   type Template,
   type CatalogEntry,
   type CatalogEntryDetail,
+  type CatalogImportResult,
   type ValidateResult,
 } from "../api";
 import { RecipeDetailModal } from "./RecipeDetailModal";
@@ -28,6 +29,10 @@ export default function Recipes() {
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<CatalogEntryDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [importResult, setImportResult] = useState<CatalogImportResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -61,6 +66,22 @@ export default function Recipes() {
       setDetail(null);
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const doImport = async (file: File) => {
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const r = await api.catalogImport(file);
+      setImportResult(r);
+      const cl = await api.catalogList();
+      setCatalogEntries(cl.entries);
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -109,12 +130,51 @@ export default function Recipes() {
 
       {/* 私有目录 */}
       <section className="mb-8">
-        <div className="flex items-center gap-2 mb-3">
-          <h2 className="text-base font-medium">私有目录</h2>
-          <span className="text-xs text-white/30">
-            从授权 App / 云端导入的归一化配方
-          </span>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-medium">私有目录</h2>
+            <span className="text-xs text-white/30">
+              从授权 App / 云端导入的归一化配方
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void doImport(f);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm font-medium disabled:opacity-50"
+            >
+              {importing ? "导入中…" : "导入 JSON"}
+            </button>
+          </div>
         </div>
+        {importError && (
+          <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {importError}
+          </div>
+        )}
+        {importResult && (
+          <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+            导入完成：候选 {importResult.candidates} · 新增 {importResult.added} · 更新 {importResult.updated} · 拒绝 {importResult.rejected} · 总计 {importResult.total}
+            {importResult.rejections.length > 0 && (
+              <ul className="mt-2 space-y-0.5 text-xs text-emerald-200/70">
+                {importResult.rejections.slice(0, 5).map((r, i) => (
+                  <li key={i}>· #{r.index} {r.name}: {r.error}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {loading ? (
           <div className="text-sm text-white/40">加载中…</div>
         ) : catalogEntries.length === 0 ? (
