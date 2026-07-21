@@ -208,6 +208,19 @@ export const api = {
   bridge: () => get<BridgeState>("/device/bridge"),
   bridgeEvents: (since = 0) =>
     get<BridgeEventsResult>(`/device/events?since=${since}`),
+  bridgeCall: async (
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    const res = await fetch(`${BASE}/device/call`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(`${res.status}: ${data.detail ?? res.statusText}`);
+    return data as Record<string, unknown>;
+  },
   templates: () => get<TemplatesResult>("/recipes/templates"),
   validate: (path: string) => post<ValidateResult>("/recipes/validate", { path }),
   catalogStatus: () => get<CatalogStatus>("/catalog/status"),

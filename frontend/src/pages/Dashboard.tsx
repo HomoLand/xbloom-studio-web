@@ -16,6 +16,10 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<BridgeEvent[]>([]);
   const eventSinceRef = useRef(0);
+  const [brewConfirm, setBrewConfirm] = useState("");
+  const [brewError, setBrewError] = useState<string | null>(null);
+  const [brewBusy, setBrewBusy] = useState<string | null>(null);
+  const [recipePath, setRecipePath] = useState("");
 
   const load = useCallback(async () => {
     setError(null);
@@ -82,6 +86,36 @@ export default function Dashboard() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const doBridgeCall = async (label: string, method: string, params?: Record<string, unknown>) => {
+    setBrewBusy(label);
+    setBrewError(null);
+    try {
+      await api.bridgeCall(method, params);
+      setBridge(await api.bridge());
+    } catch (e) {
+      setBrewError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBrewBusy(null);
+    }
+  };
+
+  const doLoadRecipe = async () => {
+    if (!recipePath.trim()) return;
+    const isTea = recipePath.trim().toLowerCase().includes("tea");
+    await doBridgeCall("load", isTea ? "tea.load" : "coffee.load", { recipe: recipePath.trim() });
+  };
+
+  const doStartBrew = async () => {
+    const isTea = bridge?.activity === "tea";
+    const expected = isTea ? "tea-brewer-water-cup-clear" : "cup-filter-water-beans";
+    if (brewConfirm.trim() !== expected) {
+      setBrewError(`确认短语不正确，请输入: ${expected}`);
+      return;
+    }
+    await doBridgeCall("start", isTea ? "tea.start" : "coffee.start", { confirmation: brewConfirm.trim() });
+    setBrewConfirm("");
   };
 
   const lp = bridge?.liquid_progress as Record<string, number | string | null> | null | undefined;
@@ -168,6 +202,95 @@ export default function Dashboard() {
                 {ev.command_code != null && <span className="text-white/30"> cmd={ev.command_code}</span>}
               </div>
             ))}
+          </div>
+        </section>
+      )}
+
+      {bridge?.running && (
+        <section className="mb-6">
+          <h2 className="text-base font-medium mb-3">冲煮控制</h2>
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
+            {brewError && (
+              <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                {brewError}
+              </div>
+            )}
+            {(!bridge.phase || bridge.phase === "idle") && (
+              <div className="flex gap-3">
+                <input
+                  value={recipePath}
+                  onChange={(e) => setRecipePath(e.target.value)}
+                  placeholder="本地配方路径，如 assets/hot-template.yaml"
+                  className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm placeholder:text-white/30 focus:outline-none focus:border-white/30"
+                />
+                <button
+                  onClick={doLoadRecipe}
+                  disabled={brewBusy === "load" || !recipePath.trim()}
+                  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm font-medium disabled:opacity-50"
+                >
+                  {brewBusy === "load" ? "加载中…" : "加载配方"}
+                </button>
+              </div>
+            )}
+            {bridge.phase === "loaded" && (
+              <div>
+                <div className="text-sm text-white/60 mb-3">
+                  已加载{bridge.activity === "tea" ? "茶" : "咖啡"}配方，确认准备就绪后输入安全短语开始冲煮。
+                </div>
+                <div className="flex gap-3">
+                  <input
+                    value={brewConfirm}
+                    onChange={(e) => setBrewConfirm(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && doStartBrew()}
+                    placeholder={bridge.activity === "tea" ? "tea-brewer-water-cup-clear" : "cup-filter-water-beans"}
+                    className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm placeholder:text-white/30 focus:outline-none focus:border-white/30"
+                  />
+                  <button
+                    onClick={doStartBrew}
+                    disabled={brewBusy === "start" || !brewConfirm.trim()}
+                    className="px-4 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm font-medium disabled:opacity-50"
+                  >
+                    {brewBusy === "start" ? "启动中…" : "开始冲煮"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {bridge.phase === "running" && (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => doBridgeCall("pause", "pause")}
+                  disabled={brewBusy !== null}
+                  className="px-4 py-2 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-sm font-medium disabled:opacity-50"
+                >
+                  {brewBusy === "pause" ? "处理中…" : "暂停"}
+                </button>
+                <button
+                  onClick={() => doBridgeCall("stop", "stop")}
+                  disabled={brewBusy !== null}
+                  className="px-4 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium disabled:opacity-50"
+                >
+                  {brewBusy === "stop" ? "处理中…" : "停止"}
+                </button>
+              </div>
+            )}
+            {bridge.phase === "paused" && (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => doBridgeCall("resume", "resume")}
+                  disabled={brewBusy !== null}
+                  className="px-4 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm font-medium disabled:opacity-50"
+                >
+                  {brewBusy === "resume" ? "处理中…" : "恢复"}
+                </button>
+                <button
+                  onClick={() => doBridgeCall("stop", "stop")}
+                  disabled={brewBusy !== null}
+                  className="px-4 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium disabled:opacity-50"
+                >
+                  {brewBusy === "stop" ? "处理中…" : "停止"}
+                </button>
+              </div>
+            )}
           </div>
         </section>
       )}

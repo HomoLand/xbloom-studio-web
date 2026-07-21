@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from bridge_client import is_running as bridge_is_running, status as bridge_status, events as bridge_events
 
@@ -110,3 +111,19 @@ def bridge_events_endpoint(since: int = Query(0)) -> dict[str, Any]:
     if not bridge_is_running():
         return {"running": False, "events": [], "next_since": since}
     return bridge_events(since)
+
+
+class CallBody(BaseModel):
+    method: str
+    params: dict[str, Any] | None = None
+
+
+@router.post("/call")
+def bridge_call_endpoint(body: CallBody) -> dict[str, Any]:
+    """Forward a RPC call to the running bridge daemon."""
+
+    if not bridge_is_running():
+        raise HTTPException(status_code=409, detail="bridge is not running")
+    from bridge_client import call as bridge_call_fn
+
+    return bridge_call_fn(body.method, body.params)
