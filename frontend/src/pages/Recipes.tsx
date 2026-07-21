@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { api, type Template, type CatalogEntry, type ValidateResult } from "../api";
+import {
+  api,
+  type Template,
+  type CatalogEntry,
+  type CatalogEntryDetail,
+  type ValidateResult,
+} from "../api";
+import { RecipeDetailModal } from "./RecipeDetailModal";
 
 const ORIGIN_LABELS: Record<string, string> = {
   "xbloom-hosted": "xBloom 官方",
@@ -19,6 +26,8 @@ export default function Recipes() {
   const [validatePath, setValidatePath] = useState("");
   const [result, setResult] = useState<ValidateResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [detail, setDetail] = useState<CatalogEntryDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -39,6 +48,19 @@ export default function Recipes() {
       setResult(await api.validate(validatePath.trim()));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const openDetail = async (id: string) => {
+    setDetailLoading(true);
+    setDetail(null);
+    try {
+      const r = await api.catalogShow(id);
+      setDetail(r.entry);
+    } catch {
+      setDetail(null);
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -108,7 +130,11 @@ export default function Recipes() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {coffeeCatalog.map((e, i) => (
-                    <CatalogCard key={e.id ?? e.table_id ?? i} e={e} />
+                    <CatalogCard
+                      key={e.id ?? e.table_id ?? i}
+                      e={e}
+                      onClick={e.id ? () => openDetail(e.id!) : undefined}
+                    />
                   ))}
                 </div>
               </div>
@@ -120,7 +146,11 @@ export default function Recipes() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {teaCatalog.map((e, i) => (
-                    <CatalogCard key={e.id ?? e.table_id ?? i} e={e} />
+                    <CatalogCard
+                      key={e.id ?? e.table_id ?? i}
+                      e={e}
+                      onClick={e.id ? () => openDetail(e.id!) : undefined}
+                    />
                   ))}
                 </div>
               </div>
@@ -174,6 +204,17 @@ export default function Recipes() {
           )}
         </div>
       </section>
+
+      {(detail || detailLoading) && (
+        <RecipeDetailModal
+          detail={detail}
+          loading={detailLoading}
+          onClose={() => {
+            setDetail(null);
+            setDetailLoading(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -197,7 +238,13 @@ function TemplateCard({ t }: { t: Template }) {
   );
 }
 
-function CatalogCard({ e }: { e: CatalogEntry }) {
+function CatalogCard({
+  e,
+  onClick,
+}: {
+  e: CatalogEntry;
+  onClick?: () => void;
+}) {
   const origin = e.origin ?? "unknown";
   const originLabel = ORIGIN_LABELS[origin] ?? origin;
   const executable = !!e.executable;
@@ -206,7 +253,12 @@ function CatalogCard({ e }: { e: CatalogEntry }) {
   const reason = errors[0];
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 hover:bg-white/[0.04] transition-colors">
+    <div
+      onClick={onClick}
+      className={`rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors ${
+        onClick ? "cursor-pointer hover:bg-white/[0.04]" : ""
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="text-sm font-medium truncate">{e.name ?? "—"}</div>
         <div className="flex gap-1 shrink-0">

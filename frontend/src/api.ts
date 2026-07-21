@@ -108,6 +108,47 @@ export type CatalogListResult = {
   entries: CatalogEntry[];
 };
 
+export type Pour = {
+  ml: number;
+  temp_c: number;
+  pattern: string;
+  pause_s: number;
+  flow_ml_s: number;
+  label?: string;
+  vibration?: string;
+  rpm?: number;
+};
+
+export type RecipeDetail = {
+  name?: string;
+  kind?: string;
+  dose_g?: number;
+  grind?: number;
+  dripper?: string;
+  water_ml?: number;
+  leaf_g?: number;
+  output_ml_per_steep?: number;
+  ratio?: number;
+  bypass_ml?: number;
+  bypass_temp_c?: number;
+  pours?: Pour[];
+  [key: string]: unknown;
+};
+
+export type CatalogEntryDetail = CatalogEntry & {
+  recipe?: RecipeDetail;
+  slot_incompatibility?: string;
+  warnings?: string[];
+  validation_errors?: string[];
+  manual_preparation?: Record<string, unknown>;
+  sources?: Array<Record<string, unknown>>;
+  first_seen_at?: string;
+  last_seen_at?: string;
+  share_link?: string;
+};
+
+export type CatalogShowResult = { entry: CatalogEntryDetail };
+
 export type HistoryStatus = {
   path: string;
   exists: boolean;
@@ -141,6 +182,8 @@ export const api = {
   catalogStatus: () => get<CatalogStatus>("/catalog/status"),
   catalogList: (kind?: string) =>
     get<CatalogListResult>(`/catalog/list${kind ? `?kind=${kind}` : ""}`),
+  catalogShow: (id: string) =>
+    get<CatalogShowResult>(`/catalog/show?id=${encodeURIComponent(id)}`),
   historyStatus: () => get<HistoryStatus>("/history/status"),
   historyList: (limit = 20) => get<HistoryListResult>(`/history/list?limit=${limit}`),
 };
