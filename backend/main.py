@@ -5,14 +5,15 @@ A local FastAPI service that exposes the existing Skill capabilities
 for the browser frontend. BLE ownership stays with the existing bridge daemon;
 this backend never holds a BLE connection of its own.
 
-Run from the repository root:
+Run from the backend directory:
 
-    python -m uvicorn web.backend.main:app --reload --port 8000
+    uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
-or after installing requirements:
+Prerequisites:
 
-    pip install -r web/backend/requirements.txt
-    uvicorn web.backend.main:app --port 8000
+    pip install -e "<path-to-xbloom-studio-brew>/skills/xbloom-studio-brew/scripts"
+    pip install -r requirements.txt
+    set XBLOOM_ASSETS_DIR to the Skill's assets directory for templates
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import catalog, device, history, recipes
+from routes import catalog, device, history, recipes
 
 
 app = FastAPI(
@@ -34,6 +35,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "http://localhost:4173",
     ],
     allow_methods=["*"],

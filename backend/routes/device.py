@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..bridge_client import is_running as bridge_is_running, status as bridge_status
+from bridge_client import is_running as bridge_is_running, status as bridge_status
 
 
 router = APIRouter(prefix="/api/device", tags=["device"])
