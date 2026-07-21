@@ -8,6 +8,7 @@ venv/
 node_modules/
 dist/
 *.local
+*.tsbuildinfo
 
 # IDE
 .vscode/

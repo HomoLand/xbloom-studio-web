@@ -37,7 +37,29 @@ pnpm install
 
 ## 运行
 
-开两个终端：
+## 运行
+
+### 日常使用（后端一站式）
+
+前端 build 后，后端一个进程同时 serve API 和页面：
+
+```powershell
+# 1) build 前端（只需在代码变动后重新执行）
+cd frontend
+pnpm build
+
+# 2) 启动后端
+cd ..\backend
+.venv\Scripts\Activate.ps1
+$env:XBLOOM_ASSETS_DIR = "C:\Users\SajoL\Documents\Code\xbloom-studio-brew\skills\xbloom-studio-brew\assets"
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+浏览器打开 `http://127.0.0.1:8000`。
+
+### 开发模式（前后端分离，HMR）
+
+需要前端热更新时，分别启动：
 
 ```powershell
 # 终端 1：backend
@@ -46,12 +68,12 @@ cd backend
 $env:XBLOOM_ASSETS_DIR = "C:\Users\SajoL\Documents\Code\xbloom-studio-brew\skills\xbloom-studio-brew\assets"
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
-# 终端 2：frontend
+# 终端 2：frontend dev server（HMR）
 cd frontend
 pnpm dev
 ```
 
-浏览器打开 `http://127.0.0.1:5173`。
+浏览器打开 `http://localhost:5173`（Vite 自动代理 `/api` 到后端）。
 
 ## 安全约束
 
@@ -61,4 +83,5 @@ pnpm dev
 
 ## 状态
 
-Stage 1 MVP：只读浏览（templates / catalog / history）+ 设备扫描/probe + 桥接状态。后续阶段逐步开放受控的 brew / abort 操作。
+Stage 1 MVP：只读浏览（templates / catalog / history）+ 设备扫描/probe + 桥接状态。
+Stage 2：配方详情查看、JSON 导入、实时遥测面板、受控冲煮操作（加载/开始/暂停/恢复/停止，带安全确认短语）。

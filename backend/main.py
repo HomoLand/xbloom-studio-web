@@ -18,8 +18,12 @@ Prerequisites:
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from routes import catalog, device, history, recipes
 
@@ -53,3 +57,26 @@ app.include_router(device.router)
 app.include_router(recipes.router)
 app.include_router(catalog.router)
 app.include_router(history.router)
+
+# Serve the built frontend (SPA) from the same process.
+_frontend_env = os.environ.get("XBLOOM_FRONTEND_DIR", "").strip()
+_frontend_dir = (
+    Path(_frontend_env).expanduser()
+    if _frontend_env
+    else Path(__file__).resolve().parent.parent / "frontend" / "dist"
+)
+
+if _frontend_dir.is_dir():
+    _frontend_root = _frontend_dir.resolve()
+
+    @app.get("/{path:path}")
+    def serve_frontend(path: str) -> FileResponse:
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = (_frontend_dir / path).resolve()
+        if str(candidate).startswith(str(_frontend_root)) and candidate.is_file():
+            return FileResponse(candidate)
+        index = _frontend_dir / "index.html"
+        if index.is_file():
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="frontend index.html not found")
