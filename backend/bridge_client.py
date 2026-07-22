@@ -1,8 +1,9 @@
-"""Bridge RPC client for the xBloom Web backend.
+"""Bridge RPC adapter for bridge-backed operations in the xBloom Web backend.
 
-Reuses the existing loopback JSON-line bridge daemon. The web backend never
-holds a BLE connection of its own; when the bridge is running it is the sole
-BLE owner, and one-shot scan/probe paths refuse to race it.
+Thin wrapper over the existing loopback JSON-line bridge daemon. This module
+only covers bridge-backed RPCs; it does not own BLE itself. Passive scan and
+one-shot direct probe live outside this module in Phase 0.6. Race-safe typed
+RPC convergence is a Phase A/A9 target.
 """
 
 from __future__ import annotations

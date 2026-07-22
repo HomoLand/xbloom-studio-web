@@ -1,0 +1,8 @@
+# Shared exact backend runtime pins (no xbloom-studio-core).
+# Included by both requirements.txt (release wheel) and requirements-dev.txt
+# (editable local core). Install from the backend/ directory.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+mcp==1.28.1
+starlette==0.41.3

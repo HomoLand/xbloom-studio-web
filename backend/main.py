@@ -2,8 +2,12 @@
 
 A local FastAPI service that exposes the existing Skill capabilities
 (scan, probe, recipe validation, catalog, history, bridge status) over HTTP
-for the browser frontend. BLE ownership stays with the existing bridge daemon;
-this backend never holds a BLE connection of its own.
+for the browser frontend.
+
+Startup and bridge-backed operations do not own BLE; those connections are
+held by the bridge daemon via bridge_client. Phase 0.6 still also exposes
+passive BLE scan and a one-shot direct probe (outside bridge_client). Full
+client convergence and race-safe typed RPC are Phase A/A9 targets.
 
 Run from the backend directory:
 
@@ -11,63 +15,113 @@ Run from the backend directory:
 
 Prerequisites:
 
-    pip install -e "<path-to-xbloom-studio-brew>/skills/xbloom-studio-brew/scripts"
+    # Release install (pinned GitHub wheel):
     pip install -r requirements.txt
-    set XBLOOM_ASSETS_DIR to the Skill's assets directory for templates
+    # Local core development (editable; no release wheel):
+    pip install -r requirements-dev.txt
+    set XBLOOM_ASSETS_DIR to the knowledge bundle's assets directory for templates
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from routes import catalog, device, history, recipes
-from xbloom_ble.bridge import BridgeCore, BridgeServer, bridge_is_running
+from xbloom_ble.bridge import ensure_bridge_daemon
+
+
+logger = logging.getLogger(__name__)
+
+
+def _log_ensure_result(result: object) -> None:
+    """Log ensure_bridge_daemon outcomes without crashing the HTTP backend."""
+
+    if not isinstance(result, dict):
+        logger.warning("ensure_bridge_daemon returned unexpected result: %r", result)
+        return
+
+    status = result.get("status")
+    message = result.get("message") or result.get("reason")
+    client_ready = bool(result.get("client_ready"))
+    upgrade_pending = bool(result.get("upgrade_pending"))
+
+    if not client_ready or upgrade_pending:
+        logger.warning(
+            "bridge daemon not client-ready (status=%s, upgrade_pending=%s, "
+            "client_ready=%s): %s",
+            status,
+            upgrade_pending,
+            client_ready,
+            message or result,
+        )
+        return
+
+    config_mismatch = (
+        result.get("config_match") is False
+        or status in ("config_mismatch_idle", "config_mismatch_active")
+        or bool(result.get("idle_restart_recommended"))
+    )
+    if config_mismatch:
+        logger.warning(
+            "bridge daemon config mismatch (status=%s) but client_ready; usable: %s",
+            status,
+            message or result,
+        )
+        return
+
+    logger.info(
+        "bridge daemon ready (status=%s, started=%s, already_running=%s)",
+        status,
+        result.get("started"),
+        result.get("already_running"),
+    )
+
+
+async def _ensure_bridge_daemon() -> None:
+    """Ensure a standalone bridge daemon is running as an independent process.
+
+    Calls core-owned ``ensure_bridge_daemon()`` (no Skill script path, no
+    sibling-checkout walk). That helper starts or reuses the daemon process
+    without connecting BLE. The backend never owns the bridge lifecycle: it
+    does not stop the bridge on shutdown/reload, so an in-progress brew is
+    not killed by a backend restart or crash.
+    """
+
+    try:
+        result = await asyncio.to_thread(ensure_bridge_daemon)
+    except Exception:
+        # Don't crash the HTTP backend; the UI will surface bridge unavailability.
+        logger.exception(
+            "failed to ensure bridge daemon; HTTP backend continues without a ready bridge"
+        )
+        return
+    _log_ensure_result(result)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """App lifespan: ensure bridge once on startup; never stop it on shutdown."""
+
+    await _ensure_bridge_daemon()
+    yield
+    # Deliberately do nothing on shutdown so the independent daemon is preserved.
 
 
 app = FastAPI(
     title="xBloom Studio Web",
     description="Local web control surface for the xBloom Studio Skill.",
     version="0.1.0",
+    lifespan=lifespan,
 )
-
-_bridge_server: BridgeServer | None = None
-_bridge_task: asyncio.Task | None = None
-
-
-@app.on_event("startup")
-async def _start_embedded_bridge() -> None:
-    """Start an embedded bridge daemon if no external one is running."""
-
-    global _bridge_server, _bridge_task
-    if bridge_is_running():
-        return
-    try:
-        core = BridgeCore()
-        _bridge_server = BridgeServer(core=core)
-        _bridge_task = asyncio.create_task(_bridge_server.run())
-    except Exception:
-        _bridge_server = None
-        _bridge_task = None
-
-
-@app.on_event("shutdown")
-async def _stop_embedded_bridge() -> None:
-    global _bridge_server, _bridge_task
-    if _bridge_server is not None:
-        _bridge_server.shutdown_event.set()
-    if _bridge_task is not None:
-        try:
-            await asyncio.wait_for(_bridge_task, timeout=5.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            _bridge_task.cancel()
-    _bridge_server = None
-    _bridge_task = None
 
 
 app.add_middleware(

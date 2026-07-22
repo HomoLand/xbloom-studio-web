@@ -99,7 +99,11 @@ def bridge_state() -> dict[str, Any]:
         return {
             "running": False,
             "available": False,
-            "hint": "start the bridge with: python scripts/xbloom.py bridge start",
+            "hint": (
+                "bridge is not running; the backend tries to start one on "
+                "startup. Restart the backend, check backend logs, or run: "
+                "xbloom-bridge start (or: python -m xbloom_ble.bridge start)"
+            ),
         }
     return {"running": True, "available": True, **bridge_status()}
 

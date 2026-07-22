@@ -163,7 +163,7 @@ export default function Dashboard() {
           )}
           {!bridge?.running && (
             <div className="mt-4 pt-4 border-t border-white/10 text-xs text-white/40 leading-relaxed">
-              Bridge 未运行。后端启动时会自动启动内置 Bridge，如未运行请检查后端日志。
+              Bridge 未运行。后端启动时会自动拉起一个独立 Bridge 进程，它与后端解耦，后端重启不会中断正在进行的冲煮。如长时间未运行请检查后端日志，或手动执行 <code className="text-white/60">xbloom-bridge start</code>（也可 <code className="text-white/60">python -m xbloom_ble.bridge start</code>）。
             </div>
           )}
         </div>
