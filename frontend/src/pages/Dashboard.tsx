@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type BridgeState, type BridgeEvent, type ScanResult, type ProbeResult } from "../api";
+import {
+  api,
+  newRequestId,
+  type BridgeState,
+  type BridgeEvent,
+  type ScanResult,
+  type ProbeResult,
+} from "../api";
 
 type Summary = {
   templates: number;
@@ -16,10 +23,34 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<BridgeEvent[]>([]);
   const eventSinceRef = useRef(0);
+  const [workflowId, setWorkflowId] = useState<string | null>(null);
+  const workflowIdRef = useRef<string | null>(null);
   const [brewConfirm, setBrewConfirm] = useState("");
   const [brewError, setBrewError] = useState<string | null>(null);
   const [brewBusy, setBrewBusy] = useState<string | null>(null);
   const [recipePath, setRecipePath] = useState("");
+
+  // Keep a ref for the poll interval so unmount/refresh never fires mutations.
+  useEffect(() => {
+    workflowIdRef.current = workflowId;
+  }, [workflowId]);
+
+  // Reset event cursor/list when the tracked workflow changes.
+  useEffect(() => {
+    eventSinceRef.current = 0;
+    setEvents([]);
+  }, [workflowId]);
+
+  const applyBridge = useCallback((b: BridgeState) => {
+    setBridge(b);
+    // Restore durable active workflow after refresh; never invent an ID.
+    // Load responses set workflowId separately so a lagging status poll cannot
+    // clobber a just-loaded workflow_id.
+    const active = b.active_workflow_id;
+    if (typeof active === "string" && active.trim()) {
+      setWorkflowId(active.trim());
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -30,7 +61,7 @@ export default function Dashboard() {
         api.catalogStatus(),
         api.historyStatus(),
       ]);
-      setBridge(b);
+      applyBridge(b);
       setSummary({
         templates: t.templates.length,
         catalogTotal: c.total,
@@ -39,19 +70,22 @@ export default function Dashboard() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [applyBridge]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  // Status/events polling is observation-only (GET). Effect cleanup only
+  // clears the observation timer — never cancel/stop/disconnect/connect.
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
         const b = await api.bridge();
-        setBridge(b);
-        if (b.running) {
-          const ev = await api.bridgeEvents(eventSinceRef.current);
+        applyBridge(b);
+        const wid = workflowIdRef.current;
+        if (b.running && wid) {
+          const ev = await api.bridgeEvents(eventSinceRef.current, wid);
           if (ev.events.length > 0) {
             setEvents((prev) => [...ev.events, ...prev].slice(0, 50));
           }
@@ -62,7 +96,7 @@ export default function Dashboard() {
       }
     }, 3000);
     return () => clearInterval(timer);
-  }, []);
+  }, [applyBridge]);
 
   const doScan = async () => {
     setBusy("scan");
@@ -88,12 +122,22 @@ export default function Dashboard() {
     }
   };
 
-  const doBridgeCall = async (label: string, method: string, params?: Record<string, unknown>) => {
-    setBrewBusy(label);
+  const doLoadRecipe = async () => {
+    if (!recipePath.trim()) return;
+    const path = recipePath.trim();
+    const isTea = path.toLowerCase().includes("tea");
+    const requestId = newRequestId("load");
+    setBrewBusy("load");
     setBrewError(null);
     try {
-      await api.bridgeCall(method, params);
-      setBridge(await api.bridge());
+      const result = isTea
+        ? await api.teaLoad(path, requestId)
+        : await api.coffeeLoad(path, requestId);
+      const wid = result.workflow_id;
+      if (typeof wid === "string" && wid.trim()) {
+        setWorkflowId(wid.trim());
+      }
+      applyBridge(await api.bridge());
     } catch (e) {
       setBrewError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -101,21 +145,57 @@ export default function Dashboard() {
     }
   };
 
-  const doLoadRecipe = async () => {
-    if (!recipePath.trim()) return;
-    const isTea = recipePath.trim().toLowerCase().includes("tea");
-    await doBridgeCall("load", isTea ? "tea.load" : "coffee.load", { recipe: recipePath.trim() });
-  };
-
   const doStartBrew = async () => {
+    const wid = workflowId;
+    if (!wid) {
+      setBrewError("缺少 workflow_id：请先加载配方，或刷新以从状态恢复");
+      return;
+    }
     const isTea = bridge?.activity === "tea";
     const expected = isTea ? "tea-brewer-water-cup-clear" : "cup-filter-water-beans";
     if (brewConfirm.trim() !== expected) {
       setBrewError(`确认短语不正确，请输入: ${expected}`);
       return;
     }
-    await doBridgeCall("start", isTea ? "tea.start" : "coffee.start", { confirmation: brewConfirm.trim() });
-    setBrewConfirm("");
+    const requestId = newRequestId("start");
+    setBrewBusy("start");
+    setBrewError(null);
+    try {
+      if (isTea) {
+        await api.teaStart(wid, brewConfirm.trim(), requestId);
+      } else {
+        await api.coffeeStart(wid, brewConfirm.trim(), requestId);
+      }
+      setBrewConfirm("");
+      applyBridge(await api.bridge());
+    } catch (e) {
+      setBrewError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBrewBusy(null);
+    }
+  };
+
+  const doControl = async (
+    label: "pause" | "resume" | "stop" | "cancel",
+    action: (wid: string, rid: string) => Promise<unknown>,
+  ) => {
+    const wid = workflowId;
+    if (!wid) {
+      setBrewError("缺少 workflow_id：请先加载配方，或刷新以从状态恢复");
+      return;
+    }
+    // One fresh request_id per user click; never auto-retry.
+    const requestId = newRequestId(label);
+    setBrewBusy(label);
+    setBrewError(null);
+    try {
+      await action(wid, requestId);
+      applyBridge(await api.bridge());
+    } catch (e) {
+      setBrewError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBrewBusy(null);
+    }
   };
 
   const lp = bridge?.liquid_progress as Record<string, number | string | null> | null | undefined;
@@ -157,6 +237,7 @@ export default function Dashboard() {
               <Field label="固件" value={bridge.firmware ?? "—"} />
               <Field label="活动" value={bridge.activity ?? "空闲"} />
               <Field label="阶段" value={bridge.phase ?? "—"} />
+              <Field label="Workflow" value={workflowId ?? bridge.active_workflow_id ?? "—"} />
             </div>
           ) : (
             <div className="text-sm text-white/40">加载中…</div>
@@ -232,7 +313,7 @@ export default function Dashboard() {
             {bridge.phase === "loaded" && (
               <div>
                 <div className="text-sm text-white/60 mb-3">
-                  已加载{bridge.activity === "tea" ? "茶" : "咖啡"}配方，确认准备就绪后输入安全短语开始冲煮。
+                  已加载{bridge.activity === "tea" ? "茶" : "咖啡"}配方，确认准备就绪后输入安全短语开始冲煮。已加载状态不会因超时自动取消。
                 </div>
                 <div className="flex gap-3">
                   <input
@@ -244,10 +325,17 @@ export default function Dashboard() {
                   />
                   <button
                     onClick={doStartBrew}
-                    disabled={brewBusy === "start" || !brewConfirm.trim()}
+                    disabled={brewBusy === "start" || !brewConfirm.trim() || !workflowId}
                     className="px-4 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm font-medium disabled:opacity-50"
                   >
                     {brewBusy === "start" ? "启动中…" : "开始冲煮"}
+                  </button>
+                  <button
+                    onClick={() => doControl("cancel", api.cancel)}
+                    disabled={brewBusy !== null || !workflowId}
+                    className="px-4 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium disabled:opacity-50"
+                  >
+                    {brewBusy === "cancel" ? "处理中…" : "取消"}
                   </button>
                 </div>
               </div>
@@ -255,15 +343,15 @@ export default function Dashboard() {
             {bridge.phase === "running" && (
               <div className="flex gap-3">
                 <button
-                  onClick={() => doBridgeCall("pause", "pause")}
-                  disabled={brewBusy !== null}
+                  onClick={() => doControl("pause", api.pause)}
+                  disabled={brewBusy !== null || !workflowId}
                   className="px-4 py-2 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-sm font-medium disabled:opacity-50"
                 >
                   {brewBusy === "pause" ? "处理中…" : "暂停"}
                 </button>
                 <button
-                  onClick={() => doBridgeCall("stop", "stop")}
-                  disabled={brewBusy !== null}
+                  onClick={() => doControl("stop", api.stop)}
+                  disabled={brewBusy !== null || !workflowId}
                   className="px-4 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium disabled:opacity-50"
                 >
                   {brewBusy === "stop" ? "处理中…" : "停止"}
@@ -273,15 +361,15 @@ export default function Dashboard() {
             {bridge.phase === "paused" && (
               <div className="flex gap-3">
                 <button
-                  onClick={() => doBridgeCall("resume", "resume")}
-                  disabled={brewBusy !== null}
+                  onClick={() => doControl("resume", api.resume)}
+                  disabled={brewBusy !== null || !workflowId}
                   className="px-4 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-sm font-medium disabled:opacity-50"
                 >
                   {brewBusy === "resume" ? "处理中…" : "恢复"}
                 </button>
                 <button
-                  onClick={() => doBridgeCall("stop", "stop")}
-                  disabled={brewBusy !== null}
+                  onClick={() => doControl("stop", api.stop)}
+                  disabled={brewBusy !== null || !workflowId}
                   className="px-4 py-2 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm font-medium disabled:opacity-50"
                 >
                   {brewBusy === "stop" ? "处理中…" : "停止"}
@@ -334,7 +422,13 @@ export default function Dashboard() {
         {probe && (
           <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
             <div className="text-sm text-white/50 mb-2">
-              {probe.machine} · <code className="text-white/40">{probe.address}</code>
+              {String(probe.machine ?? "probe")}
+              {probe.address ? (
+                <>
+                  {" "}
+                  · <code className="text-white/40">{String(probe.address)}</code>
+                </>
+              ) : null}
             </div>
             <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
               {Object.entries(probe)

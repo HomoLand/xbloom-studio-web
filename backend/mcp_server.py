@@ -1,14 +1,14 @@
 """xBloom Studio MCP server.
 
-Exposes xBloom Studio capabilities (scan, bridge control, catalog, recipes,
-history) as MCP tools for AI agents. Uses stdio transport — the agent spawns
-this process and communicates via JSON-RPC over stdin/stdout.
+Exposes xBloom Studio capabilities (scan, typed bridge control, catalog,
+recipes, history) as MCP tools for AI agents. Uses stdio transport — the agent
+spawns this process and communicates via JSON-RPC over stdin/stdout.
 
-The MCP server is a client of the shared BLE bridge daemon (loopback RPC) and
-the xbloom-studio-core library. It never holds a BLE connection of its own and
-never touches hardware directly — all physical actions go through the bridge,
-which enforces the safety model (owner gates, confirmation phrases, firmware
-checks).
+Hardware tools use the typed Web adapter (``bridge_client`` → core
+``TypedBridgeClient``). There is no raw ``bridge_call`` pass-through and no
+manual ``ensure_bridge_daemon`` in this module. Observation tools (status /
+events) never ensure the daemon or touch BLE. Only passive scan uses BLE
+discovery directly; probe is a bridge one-shot.
 
 Run:
     python mcp_server.py
@@ -18,11 +18,6 @@ Prerequisites:
     pip install -r requirements-dev.txt   # local editable core
     # or: pip install -r requirements.txt  # release wheel
     set XBLOOM_ASSETS_DIR to the knowledge bundle's assets directory for templates
-
-Bridge tools call core-owned ensure_bridge_daemon() on first use so a
-persistent bridge process is established or reused without a sibling Skill
-checkout. Starting/ensuring the daemon does not connect BLE; BLE connects only
-on explicit hardware operations.
 """
 
 from __future__ import annotations
@@ -33,10 +28,10 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from xbloom_ble.bridge import BridgeError, bridge_call, ensure_bridge_daemon
+import bridge_client as bc
+from xbloom_ble.bridge import BridgeError
 from xbloom_catalog import (
     CatalogError,
-    catalog_summary,
     default_catalog_path,
     get_entry,
     list_entries,
@@ -53,44 +48,16 @@ mcp = FastMCP("xbloom-studio")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _require_bridge() -> dict[str, Any] | None:
-    """Ensure a client-ready bridge daemon exists; return None or an error dict.
 
-    Calls core-owned ``ensure_bridge_daemon()`` once per tool invocation so the
-    first MCP/Skill use can start or reuse the persistent bridge process without
-    a sibling checkout. Does not connect BLE. Never force-stops active/recovery
-    work; surfaces upgrade_pending / not-ready results to the caller.
-    """
-    try:
-        result = ensure_bridge_daemon()
-    except Exception as exc:
-        return {
-            "error": f"failed to ensure bridge daemon: {exc}",
-            "client_ready": False,
-        }
+def _bridge_error_payload(exc: BaseException) -> dict[str, Any]:
+    """Structured error dict retaining BridgeError.category when present."""
 
-    if not isinstance(result, dict):
-        return {
-            "error": f"ensure_bridge_daemon returned unexpected result: {result!r}",
-            "client_ready": False,
-        }
-
-    if result.get("client_ready"):
-        # Config mismatch may still be client_ready and remains usable.
-        return None
-
-    err: dict[str, Any] = {
-        "error": (
-            result.get("message")
-            or result.get("reason")
-            or "bridge daemon is not client-ready"
-        ),
-        "client_ready": False,
-        "status": result.get("status"),
-    }
-    if result.get("upgrade_pending"):
-        err["upgrade_pending"] = True
-    return err
+    # Keep category/message useful; only strip secret-bearing keys if nested.
+    payload: dict[str, Any] = {"error": str(exc)}
+    category = getattr(exc, "category", None)
+    if category:
+        payload["category"] = str(category)
+    return bc.public_response(payload)
 
 
 def _catalog_load() -> tuple[dict[str, Any], Path]:
@@ -107,8 +74,9 @@ def _assets_dir() -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Discovery & status (no BLE connection needed)
+# Discovery & observation (status/events never ensure)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 async def xbloom_scan(timeout: float = 8.0) -> dict[str, Any]:
@@ -130,202 +98,330 @@ async def xbloom_scan(timeout: float = 8.0) -> dict[str, Any]:
 
 
 @mcp.tool()
+def xbloom_probe(
+    address: str | None = None,
+    scan_timeout: float = 8.0,
+) -> dict[str, Any]:
+    """One-shot redacted machine probe via the bridge daemon (never direct Bleak).
+
+    Connects through the typed bridge, reads public machine info, and releases.
+    Does not hold an explicit debug connection.
+    """
+    try:
+        result = bc.probe(address=address, scan_timeout=float(scan_timeout))
+        cleaned = bc.public_response(result)
+        if not isinstance(cleaned, dict):
+            cleaned = {"result": cleaned}
+        return {"command": "probe", **cleaned}
+    except BridgeError as exc:
+        return _bridge_error_payload(exc)
+
+
+@mcp.tool()
 def xbloom_status() -> dict[str, Any]:
     """Get the BLE bridge daemon status: connection, activity, phase, telemetry.
 
-    This is the primary status check. Returns running=False if the bridge is
-    not running. When connected, includes machine name, firmware, current
-    activity/phase, live telemetry, and the last operation result.
+    Observation only: does not start the daemon or connect BLE. Returns
+    running=False with a hint when the bridge is not available. Includes
+    active_workflow_id when a durable workflow is present.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
-    return bridge_call("status")
+    try:
+        return bc.status()
+    except BridgeError as exc:
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
-def xbloom_events(since: int = 0) -> dict[str, Any]:
-    """Poll bridge daemon events since a sequence number.
+def xbloom_events(workflow_id: str, since: int = 0) -> dict[str, Any]:
+    """Poll bridge daemon events for an explicit workflow_id.
 
-    Returns events with seq numbers greater than 'since'. Use next_since from
-    the previous response as the next 'since' value for incremental polling.
+    Observation only: does not ensure the daemon or connect BLE. Returns events
+    with seq numbers greater than 'since'. Use next_since from the previous
+    response as the next 'since' value for incremental polling.
     """
-    err = _require_bridge()
-    if err is not None:
-        return {"running": False, "events": [], "next_since": since}
-    return bridge_call("events", {"since": since})
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "events requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
+    try:
+        return bc.events(since=int(since), workflow_id=wid)
+    except BridgeError as exc:
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
-# Connection management
+# Connection management (debug hold)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def xbloom_connect(address: str | None = None) -> dict[str, Any]:
-    """Connect the bridge to an xBloom machine.
+    """Connect the bridge to an xBloom machine (explicit debug hold).
 
-    If address is omitted, scans for exactly one nearby machine. Once
-    connected, the bridge holds the BLE session (the machine shows as
-    connected). Only one machine can be connected at a time.
+    If address is omitted, the daemon scans for exactly one nearby machine.
+    Holds the BLE session until xbloom_disconnect. Prefer workflow load/start
+    for normal brewing — those ensure connection as part of the workflow.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
     try:
-        return bridge_call("connect", {"address": address} if address else {})
+        return bc.connect(address=address)
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
 def xbloom_disconnect() -> dict[str, Any]:
-    """Disconnect the bridge from the current machine.
+    """Disconnect an explicit debug BLE link on a running daemon.
 
-    Refuses if an activity (brew/grinder/water) is loaded or running — stop
-    or cancel it first.
+    Never starts a missing daemon. Refuses if an activity is loaded or running
+    — stop or cancel it first.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
     try:
-        return bridge_call("disconnect")
+        return bc.disconnect()
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
 # Coffee
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
-def xbloom_coffee_load(recipe_path: str) -> dict[str, Any]:
+def xbloom_coffee_load(
+    recipe_path: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
     """Load a coffee recipe into the machine (arms it).
 
     The recipe_path must be a local YAML file. The bridge validates it
-    strictly, connects if needed, and sends the load command. The machine
-    enters 'armed' state. The recipe must be slot-compatible.
-
-    After loading, use xbloom_coffee_start to begin brewing.
+    strictly, connects if needed, and sends the load command. Returns a durable
+    workflow_id that must be passed to start/pause/resume/stop/cancel/events.
+    Loaded recipes wait for start or explicit cancel; there is no time-driven
+    expiry.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
     try:
         resolved = str(Path(recipe_path).expanduser().resolve(strict=True))
-        return bridge_call("coffee.load", {"recipe": resolved})
+        return bc.coffee_load(recipe=resolved, request_id=request_id)
     except (BridgeError, OSError) as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
-def xbloom_coffee_start(confirmation: str) -> dict[str, Any]:
-    """Start brewing the loaded coffee recipe.
+def xbloom_coffee_start(
+    workflow_id: str,
+    confirmation: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Start brewing the loaded coffee recipe for the given workflow_id.
 
     Requires the confirmation phrase 'cup-filter-water-beans' — this is the
     safety gate confirming the cup is in place, the filter is ready, water is
     loaded, and beans are ground. The bridge also requires the
     XBLOOM_ENABLE_REMOTE_START env var to be set on the daemon.
 
-    A loaded recipe expires after 5 minutes; reload if it's stale.
+    Pass the exact workflow_id returned by xbloom_coffee_load (or status).
+    Do not invent or guess a workflow_id. Supply one request_id per attempt;
+    never auto-retry uncertain mutations.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "coffee.start requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
     try:
-        return bridge_call("coffee.start", {"confirmation": confirmation})
+        return bc.coffee_start(
+            workflow_id=wid,
+            confirmation=confirmation,
+            request_id=request_id,
+        )
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
 # Tea
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
-def xbloom_tea_load(recipe_path: str) -> dict[str, Any]:
+def xbloom_tea_load(
+    recipe_path: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
     """Load a tea recipe into the machine.
 
-    The recipe_path must be a local YAML file (tea recipe format). The bridge
-    validates it, connects if needed, and sends the tea load command.
-
-    After loading, use xbloom_tea_start to begin brewing.
+    The recipe_path must be a local YAML file (tea recipe format). Returns a
+    durable workflow_id for subsequent start/control/events. Loaded recipes
+    wait for start or explicit cancel; there is no time-driven expiry.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
     try:
         resolved = str(Path(recipe_path).expanduser().resolve(strict=True))
-        return bridge_call("tea.load", {"recipe": resolved})
+        return bc.tea_load(recipe=resolved, request_id=request_id)
     except (BridgeError, OSError) as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
-def xbloom_tea_start(confirmation: str) -> dict[str, Any]:
-    """Start brewing the loaded tea recipe.
+def xbloom_tea_start(
+    workflow_id: str,
+    confirmation: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Start brewing the loaded tea recipe for the given workflow_id.
 
-    Requires the confirmation phrase 'tea-brewer-water-cup-clear' — this is
-    the safety gate confirming the tea brewer is in place, water is loaded,
-    the cup is ready, and the area is clear. The bridge also requires the
-    XBLOOM_ENABLE_REMOTE_START env var to be set on the daemon.
+    Requires the confirmation phrase 'tea-brewer-water-cup-clear'. Pass the
+    exact workflow_id from load/status; do not invent one.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "tea.start requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
     try:
-        return bridge_call("tea.start", {"confirmation": confirmation})
+        return bc.tea_start(
+            workflow_id=wid,
+            confirmation=confirmation,
+            request_id=request_id,
+        )
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
 # Flow control
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
-def xbloom_pause() -> dict[str, Any]:
-    """Pause the running coffee, grinder, or water activity."""
-    err = _require_bridge()
-    if err is not None:
-        return err
+def xbloom_pause(
+    workflow_id: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Pause the running coffee, grinder, or water activity for workflow_id."""
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "pause requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
     try:
-        return bridge_call("pause")
+        return bc.pause(workflow_id=wid, request_id=request_id)
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
-def xbloom_resume() -> dict[str, Any]:
-    """Resume a paused coffee, grinder, or water activity."""
-    err = _require_bridge()
-    if err is not None:
-        return err
+def xbloom_resume(
+    workflow_id: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Resume a paused coffee, grinder, or water activity for workflow_id."""
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "resume requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
     try:
-        return bridge_call("resume")
+        return bc.resume(workflow_id=wid, request_id=request_id)
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 @mcp.tool()
-def xbloom_stop() -> dict[str, Any]:
-    """Stop or cancel the current activity, or recover a stale loaded recipe.
+def xbloom_stop(
+    workflow_id: str | None = None,
+    request_id: str | None = None,
+    emergency: bool = False,
+) -> dict[str, Any]:
+    """Stop the current activity for workflow_id.
 
-    If an activity is running, sends a cancel. If nothing is running but a
-    loaded-recipe record exists, recovers it (cancels on the machine and
-    clears the record). Safe to call when idle.
+    Normal stop requires an explicit workflow_id. Only when emergency=true may
+    workflow_id be omitted (explicit emergency path). Do not invent a
+    workflow_id. Supply one request_id per attempt; never auto-retry.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
+    if not emergency and not (workflow_id or "").strip():
+        return {
+            "error": (
+                "stop requires workflow_id unless emergency=true "
+                "(do not invent a workflow_id)"
+            ),
+            "category": "invalid_request",
+        }
     try:
-        return bridge_call("stop")
+        return bc.stop(
+            workflow_id=workflow_id,
+            request_id=request_id,
+            emergency=bool(emergency),
+        )
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
+
+
+@mcp.tool()
+def xbloom_cancel(
+    workflow_id: str | None = None,
+    request_id: str | None = None,
+    emergency: bool = False,
+) -> dict[str, Any]:
+    """Cancel the current activity for workflow_id.
+
+    Normal cancel requires an explicit workflow_id. Only when emergency=true may
+    workflow_id be omitted. Do not invent a workflow_id.
+    """
+    if not emergency and not (workflow_id or "").strip():
+        return {
+            "error": (
+                "cancel requires workflow_id unless emergency=true "
+                "(do not invent a workflow_id)"
+            ),
+            "category": "invalid_request",
+        }
+    try:
+        return bc.cancel(
+            workflow_id=workflow_id,
+            request_id=request_id,
+            emergency=bool(emergency),
+        )
+    except BridgeError as exc:
+        return _bridge_error_payload(exc)
+
+
+@mcp.tool()
+def xbloom_recovery_reconcile(
+    workflow_id: str,
+    address: str | None = None,
+    scan_timeout: float = 8.0,
+) -> dict[str, Any]:
+    """Reconcile machine state for a recovery workflow (query only, no re-start).
+
+    Requires the matching workflow_id. Connects and queries fresh state; never
+    re-sends load/start control writes.
+    """
+    wid = (workflow_id or "").strip()
+    if not wid:
+        return {
+            "error": "recovery.reconcile requires an explicit workflow_id",
+            "category": "invalid_request",
+        }
+    try:
+        return bc.recovery_reconcile(
+            workflow_id=wid,
+            address=address,
+            scan_timeout=float(scan_timeout),
+        )
+    except BridgeError as exc:
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
 # Hot water (FreeSolo)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def xbloom_water_start(
@@ -334,6 +430,7 @@ def xbloom_water_start(
     confirmation: str,
     flow_ml_s: float = 3.5,
     pattern: str = "center",
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """Start dispensing hot water (FreeSolo mode).
 
@@ -345,27 +442,23 @@ def xbloom_water_start(
     place, water is loaded, and the area is clear. The bridge also requires
     XBLOOM_ENABLE_REMOTE_START on the daemon.
     """
-    err = _require_bridge()
-    if err is not None:
-        return err
     try:
-        return bridge_call(
-            "water.start",
-            {
-                "volume_ml": volume_ml,
-                "temp_c": temp_c,
-                "flow_ml_s": flow_ml_s,
-                "pattern": pattern,
-                "confirmation": confirmation,
-            },
+        return bc.water_start(
+            volume_ml=volume_ml,
+            temp_c=temp_c,
+            flow_ml_s=flow_ml_s,
+            pattern=pattern,
+            confirmation=confirmation,
+            request_id=request_id,
         )
     except BridgeError as exc:
-        return {"error": str(exc)}
+        return _bridge_error_payload(exc)
 
 
 # ---------------------------------------------------------------------------
 # Catalog (no BLE needed)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def xbloom_catalog_list(
@@ -409,6 +502,7 @@ def xbloom_catalog_show(id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Recipes (no BLE needed)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def xbloom_recipe_templates() -> dict[str, Any]:
@@ -476,6 +570,7 @@ def xbloom_recipe_validate(path: str, slot: bool = False) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # History (no BLE needed)
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def xbloom_history_list(limit: int = 20) -> dict[str, Any]:

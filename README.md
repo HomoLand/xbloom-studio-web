@@ -96,7 +96,7 @@ uvicorn main:app --host 127.0.0.1 --port 8000
 
 后端启动时调用 core 的 `ensure_bridge_daemon()`，在独立进程中拉起或复用 BLE bridge 守护进程（**不会**搜索 Skill 的 `xbloom.py` 脚本，也**不会**为启动而连接 BLE）。bridge 与后端进程解耦：后端 `--reload` / 崩溃 / 主动停止都不会中断 bridge，正在进行的冲煮会继续跑完。停止 bridge 使用 core CLI，例如 `xbloom-bridge stop` 或 `python -m xbloom_ble.bridge stop`（需已安装 `xbloom-studio-core`）。
 
-启动/ensure 本身不连接 BLE。经 bridge 的硬件操作（connect / load / start 等）由 daemon 持有连接。Web 在 Phase 0.6 仍另有被动 scan 与一次性 direct probe（见下方「Bridge 共存模型」）。Phase A 目标是更广的 bridge 客户端收敛与经确认的终端/workflow 断开语义；本阶段不改这些 Web 侧语义。
+**Phase A9 连接语义**：仅**被动 scan** 直接使用 BLE discovery（`xbloom_ble.client.scan`）。**probe** 与全部主动硬件操作（load / start / pause / resume / stop / cancel / water / debug connect 等）经 Web 适配层 `bridge_client` → core `TypedBridgeClient` → 常驻 bridge daemon。HTTP/MCP **没有**通用 `call(method, params)` 透传。`status` / `events` 为**纯观察**：不 ensure daemon、不连接 BLE。`load` 返回不可变 `workflow_id`；绑定的 start / 控制 / events 必须携带该 ID。一次 load 到确认终态/取消只持有一条 BLE 链路，**无五分钟 loaded 过期**；确认终态或确认 cancel 后 bridge 立即释放 BLE。页面关闭、刷新或 MCP 进程退出**不会** cancel 或 release 连接。
 
 ### 开发模式（前后端分离，HMR）
 
@@ -116,24 +116,22 @@ pnpm dev
 
 浏览器打开 `http://localhost:5173`（Vite 自动代理 `/api` 到后端）。
 
-## Bridge 共存模型
+## Bridge 共存模型（Phase A9）
 
-BLE bridge 是抢占式的单实例守护进程。OS 锁作用域是 **一个规范化后的 state root + 当前 OS 用户**（由 `XBLOOM_STATE_DIR` 解析）：谁先持有该 scope 上的锁，谁就是该 scope 上的唯一 bridge 守护进程。**不同 state root 在 Phase 0 不做协调**——各自可独立运行自己的 daemon，彼此互不感知。
+BLE bridge 是抢占式的单实例守护进程。OS 锁作用域是 **一个规范化后的 state root + 当前 OS 用户**（由 `XBLOOM_STATE_DIR` 解析）：谁先持有该 scope 上的锁，谁就是该 scope 上的唯一 bridge 守护进程。**不同 state root 不做协调**——各自可独立运行自己的 daemon，彼此互不感知。
 
-### Phase 0.6 已实现的保证
+### 已实现的保证
 
-- 当客户端共享同一 `XBLOOM_STATE_DIR`（同一规范化 state root）时，**经 bridge 的操作**会复用同一个 daemon。
-- 后端启动与 MCP 的 `ensure_bridge_daemon()` **只**拉起或复用独立守护进程，**不会**连接 BLE。
-- `bridge.lock` 是 OS 生命周期的单实例锁（按规范化 state root + OS user 占位）。
-- `bridge.json` 是认证后的 loopback 发现文件（identity/port/token/protocol/config）；它不是单实例锁。
-- bridge 作为独立子进程运行；后端与 MCP 通过 `ensure_bridge_daemon()` 确保进程存在，**不负责**在 shutdown 时停止它。后端重启不会连坐正在进行的冲煮。
-- 同一 daemon 内部用 `asyncio.Lock` 串行化状态变更；并发请求会被安全排队或返回 `busy`。
-
-### 与 Phase A 目标的区分
-
-**Phase A 目标**（架构方向，尚未在本阶段实现）：Web UI、Skill、MCP 等全部作为 bridge 客户端，经 loopback JSON-line RPC 发指令，没有人直接持有 BLE 连接；更广的 active-operation 收敛，以及经确认的终端/workflow 断开语义，亦归 Phase A。
-
-**Phase 0.6 现状**：Web 仍保留 **被动 BLE scan** 与 **一次性 direct probe**（直连读机后断开）。更广的主动操作收敛、以及 workflow/terminal disconnect，均推迟到 Phase A。本阶段不改变这些 Web 侧语义。
+- 共享同一 `XBLOOM_STATE_DIR` 时，Web HTTP、MCP 与 Skill CLI 经类型化 bridge RPC 复用**同一个** daemon。
+- **后端 lifespan 启动**可 `ensure_bridge_daemon()` 拉起/复用守护进程，**不**连接 BLE；shutdown **从不**停止 daemon。
+- **硬件方法**（load/start/…）由 `TypedBridgeClient` 在每次调用时 ensure daemon 进程（仍不自动为 status/events 建联）；BLE 仅在 bridge 执行硬件操作时按需建立。
+- **观察**（`GET /api/device/bridge`、`GET /api/device/events?workflow_id=…`、MCP `xbloom_status` / `xbloom_events`）不 ensure、不触碰 BLE。
+- **被动 scan** 是唯一可直用 discovery 的路径；**probe** 是 bridge one-shot 读-only（redacted 机信息后释放）。
+- **debug connect** 显式持有 BLE 直到 **debug disconnect**；disconnect **从不**为缺失 daemon 做 ensure/start。
+- 一次 workflow：load → start → pause/resume → events 复用同一 BLE 连接与同一 `workflow_id`；loaded **无**时间驱动过期；确认终态/cancel 后 promptly release。
+- 变更 RPC 携带幂等 `request_id`（调用方传入则原样保留，禁止对不确定结果自动重试）；绑定控制必须带匹配的 `workflow_id`，紧急 stop/cancel 仅在显式 `emergency=true` 时可省略。
+- `bridge.lock` 是 OS 生命周期单实例锁；`bridge.json` 是认证后的 loopback 发现文件（非锁）。
+- 页面/MCP 进程退出只停止观察轮询，**不** cancel workflow、**不** release BLE。
 
 ## 安全约束
 
@@ -149,17 +147,18 @@ BLE bridge 是抢占式的单实例守护进程。OS 锁作用域是 **一个规
 
 | 类别 | 工具 |
 |---|---|
-| 发现/状态 | `xbloom_scan`, `xbloom_status`, `xbloom_events` |
-| 连接 | `xbloom_connect`, `xbloom_disconnect` |
-| 咖啡 | `xbloom_coffee_load`, `xbloom_coffee_start` |
+| 发现/观察 | `xbloom_scan`（被动 discovery）, `xbloom_probe`（bridge one-shot）, `xbloom_status`, `xbloom_events`（需 `workflow_id`） |
+| Debug 连接 | `xbloom_connect`, `xbloom_disconnect`（显式 hold；disconnect 不 start 缺失 daemon） |
+| 咖啡 | `xbloom_coffee_load`（返回 `workflow_id`）, `xbloom_coffee_start`（需 `workflow_id`） |
 | 茶 | `xbloom_tea_load`, `xbloom_tea_start` |
-| 流程控制 | `xbloom_pause`, `xbloom_resume`, `xbloom_stop` |
+| 流程控制 | `xbloom_pause`, `xbloom_resume`, `xbloom_stop`, `xbloom_cancel`（正常路径需 `workflow_id`；紧急路径显式 `emergency=true`） |
+| 恢复 | `xbloom_recovery_reconcile`（需 `workflow_id`，只查询对账） |
 | 热水 | `xbloom_water_start` |
 | 目录 | `xbloom_catalog_list`, `xbloom_catalog_show` |
 | 配方 | `xbloom_recipe_templates`, `xbloom_recipe_validate` |
 | 历史 | `xbloom_history_list` |
 
-安全关键工具（coffee_start / tea_start / water_start）需要确认短语参数，bridge daemon 会强制校验。
+安全关键工具（coffee_start / tea_start / water_start）需要确认短语；start/pause/resume/stop/cancel 等变更可带 `request_id`。结构化错误保留 `category`。
 
 ### 运行
 
@@ -190,11 +189,10 @@ python mcp_server.py
 }
 ```
 
-BLE 相关工具（`xbloom_scan` 除外）在首次使用时会通过 `ensure_bridge_daemon()` 拉起或复用持久 bridge 进程（不连接 BLE）。若 daemon 处于 `upgrade_pending` / 非 `client_ready`，工具返回明确错误，不会强制打断进行中的活动。
+硬件类 MCP 工具经 `TypedBridgeClient` 在调用时 ensure 兼容的 bridge 进程（不连接 BLE）；`xbloom_status` / `xbloom_events` **不** ensure。被动 `xbloom_scan` 不依赖 daemon。若 daemon 非 `client_ready` / 协议不兼容，工具返回带 `category` 的错误，不强制打断进行中的活动。
 
 ## 状态
 
-Stage 1 MVP：只读浏览（templates / catalog / history）+ 设备扫描/probe + 桥接状态。
-Stage 2：配方详情查看、JSON 导入、实时遥测面板、受控冲煮操作（加载/开始/暂停/恢复/停止，带安全确认短语）。
-Stage 3：依赖重整（core 抽出为独立包）+ MCP server（18 个工具，Agent 直接调用，带安全确认短语）。
-Stage 4（Phase 0.6）：Web 切到 core 拥有的 `ensure_bridge_daemon()`；发布安装 pin GitHub wheel v1.2.0，无需 sibling checkout。
+- Stage 1–3：只读浏览、配方详情/导入、遥测与受控冲煮、MCP 工具面。
+- Stage 4（Phase 0.6）：Web 使用 core `ensure_bridge_daemon()`；发布 pin GitHub wheel v1.2.0。
+- **Stage 5（Phase A9）**：HTTP/MCP 收敛到类型化 bridge 客户端；删除通用 `/api/device/call`；显式 `workflow_id` / `request_id`；probe 走 bridge；仅被动 scan 直连 discovery；无五分钟 loaded 过期；观察路径零 BLE/ensure 副作用。

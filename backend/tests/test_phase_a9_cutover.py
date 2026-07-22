@@ -1,0 +1,665 @@
+"""Phase A9 Web/MCP typed bridge cutover tests.
+
+No BLE hardware, no real bridge daemon. Uses a temp XBLOOM_STATE_DIR and
+mocks the typed Web adapter / core TypedBridgeClient. Run from backend/:
+
+    python -m pytest tests/ -q
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+REPO_ROOT = BACKEND_DIR.parent
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    state = tmp_path / "xbloom-state"
+    state.mkdir()
+    monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
+    return state
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _parse(path: Path) -> ast.AST:
+    return ast.parse(_read(path), filename=str(path))
+
+
+def _imported_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            names.add(mod)
+            for alias in node.names:
+                names.add(alias.name)
+                if mod:
+                    names.add(f"{mod}.{alias.name}")
+    return names
+
+
+def _called_names(tree: ast.AST) -> set[str]:
+    """Collect simple call identifiers: foo(), mod.foo(), obj.foo()."""
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+            # dotted prefix when base is a Name
+            parts: list[str] = [func.attr]
+            cur = func.value
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name):
+                parts.append(cur.id)
+                names.add(".".join(reversed(parts)))
+    return names
+
+
+def _function_defs(tree: ast.AST) -> set[str]:
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _route_paths(app) -> set[tuple[str, str]]:
+    """Return {(METHOD, path)} for registered FastAPI routes."""
+
+    out: set[tuple[str, str]] = set()
+    for route in app.routes:
+        methods = getattr(route, "methods", None) or set()
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+        for method in methods:
+            out.add((method.upper(), path))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Source contracts (AST / routes — not docstring substring traps)
+# ---------------------------------------------------------------------------
+
+
+def test_no_public_bridge_call_pass_through():
+    tree = _parse(BACKEND_DIR / "bridge_client.py")
+    defs = _function_defs(tree)
+    assert "call" not in defs
+    src = _read(BACKEND_DIR / "bridge_client.py")
+    assert "TypedBridgeClient" in src
+    assert "xbloom-studio-web" in src
+
+
+def test_device_routes_register_explicit_endpoints_not_generic_call():
+    import main as main_mod
+
+    routes = _route_paths(main_mod.app)
+    assert ("POST", "/api/device/call") not in routes
+    assert ("POST", "/api/device/coffee/load") in routes
+    assert ("POST", "/api/device/coffee/start") in routes
+    assert ("POST", "/api/device/tea/load") in routes
+    assert ("POST", "/api/device/tea/start") in routes
+    assert ("POST", "/api/device/pause") in routes
+    assert ("POST", "/api/device/resume") in routes
+    assert ("POST", "/api/device/stop") in routes
+    assert ("POST", "/api/device/cancel") in routes
+    assert ("POST", "/api/device/recovery/reconcile") in routes
+    assert ("POST", "/api/device/connect") in routes
+    assert ("POST", "/api/device/disconnect") in routes
+    assert ("GET", "/api/device/scan") in routes
+    assert ("GET", "/api/device/probe") in routes
+    assert ("GET", "/api/device/bridge") in routes
+    assert ("GET", "/api/device/events") in routes
+
+    device_tree = _parse(BACKEND_DIR / "routes" / "device.py")
+    # Sync bridge work must be offloaded.
+    assert "to_thread" in _called_names(device_tree)
+
+
+def test_only_passive_scan_uses_xbloom_client_discovery():
+    """AST: XBloomClient never imported; scan import only in scan tools."""
+
+    for rel in (
+        "bridge_client.py",
+        "main.py",
+        "mcp_server.py",
+        "routes/device.py",
+    ):
+        tree = _parse(BACKEND_DIR / rel)
+        imported = _imported_names(tree)
+        assert "XBloomClient" not in imported, f"{rel} imports XBloomClient"
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "XBloomClient":
+                pytest.fail(f"{rel} references XBloomClient")
+
+    device_tree = _parse(BACKEND_DIR / "routes" / "device.py")
+    device_imports = _imported_names(device_tree)
+    assert "scan" in device_imports
+    # probe goes through adapter (bc.probe / bridge_client.probe), not XBloomClient.
+    device_attrs = {
+        node.attr
+        for node in ast.walk(device_tree)
+        if isinstance(node, ast.Attribute)
+    }
+    assert "probe" in device_attrs
+    assert "coffee_load" in device_attrs or "coffee_load" in _called_names(device_tree)
+
+    mcp_tree = _parse(BACKEND_DIR / "mcp_server.py")
+    mcp_imports = _imported_names(mcp_tree)
+    assert "scan" in mcp_imports
+
+
+def test_mcp_does_not_import_or_call_raw_bridge_call_or_manual_ensure():
+    tree = _parse(BACKEND_DIR / "mcp_server.py")
+    imported = _imported_names(tree)
+    called = _called_names(tree)
+    defs = _function_defs(tree)
+
+    assert "bridge_call" not in imported
+    assert "bridge_call" not in called
+    assert "ensure_bridge_daemon" not in imported
+    assert "ensure_bridge_daemon" not in called
+    assert "_require_bridge" not in defs
+    assert "_require_bridge" not in called
+    # Typed adapter is used.
+    assert "bridge_client" in imported or "bc" in {
+        n.asname or n.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.alias)
+    } or any(
+        isinstance(n, ast.Import)
+        and any(a.name == "bridge_client" for a in n.names)
+        for n in ast.walk(tree)
+    )
+
+    # No stale five-minute loaded expiry wording in tool docstrings/source.
+    src = _read(BACKEND_DIR / "mcp_server.py")
+    assert "expires after 5" not in src
+    assert "5 minutes" not in src
+    assert re.search(r"\bfive[- ]minute\b", src, re.I) is None
+
+
+def test_frontend_explicit_workflow_and_cancel_no_generic_call():
+    api_src = _read(REPO_ROOT / "frontend" / "src" / "api.ts")
+    dash_src = _read(REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx")
+
+    assert "bridgeCall" not in api_src
+    assert "bridgeCall" not in dash_src
+    assert re.search(r"/device/call\b", api_src) is None
+    assert "coffeeLoad" in api_src
+    assert "cancel:" in api_src or "cancel =" in api_src or "cancel(" in api_src
+    assert "/device/cancel" in api_src
+    assert "workflowId" in dash_src
+    assert "newRequestId" in dash_src
+    assert "active_workflow_id" in api_src
+
+    # Loaded phase renders cancel and invokes api.cancel with workflow + request id.
+    assert 'phase === "loaded"' in dash_src or "phase === 'loaded'" in dash_src
+    assert "doControl(" in dash_src and "cancel" in dash_src
+    assert "api.cancel" in dash_src
+    # doControl typing includes cancel and generates one request_id per action.
+    assert '"cancel"' in dash_src or "'cancel'" in dash_src
+    assert "newRequestId(label)" in dash_src
+
+    # Effect cleanup only clears observation timer — no cancel/stop/disconnect.
+    # Look for the poll effect cleanup pattern.
+    assert "clearInterval(timer)" in dash_src
+    cleanup_idx = dash_src.index("clearInterval(timer)")
+    # Nearby cleanup must not invoke control APIs.
+    window = dash_src[max(0, cleanup_idx - 200) : cleanup_idx + 120]
+    assert "api.cancel" not in window
+    assert "api.stop" not in window
+    assert "api.disconnect" not in window if "disconnect" in api_src else True
+    # Broader: unmount path should not call cancel/stop as cleanup side effects.
+    # The only cancel invocation is the loaded-phase button via doControl.
+    cancel_invocations = [
+        line.strip()
+        for line in dash_src.splitlines()
+        if "api.cancel" in line or 'doControl("cancel"' in line or "doControl('cancel'" in line
+    ]
+    assert cancel_invocations, "Dashboard must invoke cancel for loaded workflows"
+    for line in cancel_invocations:
+        assert "useEffect" not in line
+        assert "return ()" not in line
+
+
+def test_main_still_ensures_daemon_on_startup_not_shutdown():
+    tree = _parse(BACKEND_DIR / "main.py")
+    called = _called_names(tree)
+    assert "ensure_bridge_daemon" in called or "ensure_bridge_daemon" in _imported_names(
+        tree
+    )
+    src = _read(BACKEND_DIR / "main.py")
+    lifespan_body = src[src.index("async def lifespan") : src.index("\napp = FastAPI")]
+    before_yield, after_yield = lifespan_body.split("yield", 1)
+    assert "await _ensure_bridge_daemon()" in before_yield
+    assert "stop_bridge" not in after_yield
+    assert "ensure_bridge_daemon" not in after_yield
+
+
+# ---------------------------------------------------------------------------
+# Adapter behavior
+# ---------------------------------------------------------------------------
+
+
+def test_status_offline_without_ensure(monkeypatch):
+    import bridge_client as bc
+
+    ensure = MagicMock(side_effect=AssertionError("status must not ensure"))
+    monkeypatch.setattr(bc.client, "ensure_daemon", ensure)
+    monkeypatch.setattr(bc, "is_running", lambda: False)
+    monkeypatch.setattr(
+        bc.client, "status", MagicMock(side_effect=AssertionError("no status rpc"))
+    )
+    out = bc.status()
+    assert out["running"] is False
+    assert out.get("available") is False
+    ensure.assert_not_called()
+
+
+def test_events_requires_workflow_id_and_does_not_ensure(monkeypatch):
+    import bridge_client as bc
+    from xbloom_ble.bridge import BridgeError
+
+    ensure = MagicMock(side_effect=AssertionError("events must not ensure"))
+    monkeypatch.setattr(bc.client, "ensure_daemon", ensure)
+    monkeypatch.setattr(bc, "is_running", lambda: False)
+
+    with pytest.raises(BridgeError) as ei:
+        bc.events(since=0, workflow_id="")
+    assert getattr(ei.value, "category", None) == "invalid_request"
+    ensure.assert_not_called()
+
+    out = bc.events(since=3, workflow_id="wf_1")
+    assert out["running"] is False
+    assert out["events"] == []
+    assert out["next_since"] == 3
+    ensure.assert_not_called()
+
+
+def test_disconnect_never_starts_daemon(monkeypatch):
+    import bridge_client as bc
+    from xbloom_ble.bridge import BridgeError
+
+    ensures: list[int] = []
+    monkeypatch.setattr(
+        "xbloom_ble.bridge_client.ensure_bridge_daemon",
+        lambda **k: ensures.append(1) or {"client_ready": True},
+    )
+    monkeypatch.setattr(
+        "xbloom_ble.bridge_client.bridge_is_running",
+        lambda **k: False,
+    )
+    monkeypatch.setattr(bc, "is_running", lambda: False)
+    with pytest.raises(BridgeError) as ei:
+        bc.disconnect()
+    assert ensures == []
+    assert getattr(ei.value, "category", None) == "daemon_not_running"
+
+
+def test_probe_uses_typed_client_and_redacts_secrets(monkeypatch):
+    import bridge_client as bc
+
+    mock_probe = MagicMock(
+        return_value={
+            "firmware": "1.0",
+            "address": "AA:BB",
+            "serial_number": "SECRET",
+            "nested": {"token": "t", "ok": True},
+        }
+    )
+    monkeypatch.setattr(bc.client, "probe", mock_probe)
+    out = bc.probe(address="AA:BB", scan_timeout=5.0)
+    mock_probe.assert_called_once()
+    assert out["firmware"] == "1.0"
+    assert "serial_number" not in out
+    assert "token" not in out.get("nested", {})
+    assert out["nested"]["ok"] is True
+
+
+def test_public_response_recursive_redaction():
+    import bridge_client as bc
+
+    cleaned = bc.public_response(
+        {
+            "ok": True,
+            "serial_number": "S",
+            "token": "T",
+            "deep": [{"password": "p", "x": 1}, {"auth_token": "a"}],
+        }
+    )
+    assert cleaned == {"ok": True, "deep": [{"x": 1}, {}]}
+
+
+def test_coffee_start_preserves_request_and_workflow_id(monkeypatch):
+    import bridge_client as bc
+
+    seen: dict = {}
+
+    def fake_start(**kwargs):
+        seen.update(kwargs)
+        return {"status": "running", "workflow_id": kwargs["workflow_id"]}
+
+    monkeypatch.setattr(bc.client, "coffee_start", fake_start)
+    out = bc.coffee_start(
+        workflow_id="wf_abc",
+        confirmation="cup-filter-water-beans",
+        request_id="req_keep",
+    )
+    assert seen["workflow_id"] == "wf_abc"
+    assert seen["request_id"] == "req_keep"
+    assert out["workflow_id"] == "wf_abc"
+
+
+# ---------------------------------------------------------------------------
+# HTTP routes
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client(monkeypatch):
+    import main as main_mod
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(main_mod, "_ensure_bridge_daemon", _noop)
+    return TestClient(main_mod.app)
+
+
+def test_http_no_registered_device_call_route(client):
+    """No POST /api/device/call route; request may be 404 or 405."""
+    import main as main_mod
+
+    routes = _route_paths(main_mod.app)
+    assert ("POST", "/api/device/call") not in routes
+    res = client.post("/api/device/call", json={"method": "status"})
+    assert res.status_code in (404, 405)
+
+
+def test_http_events_requires_workflow_id(client, monkeypatch):
+    import bridge_client as bc
+
+    monkeypatch.setattr(bc, "is_running", lambda: True)
+    monkeypatch.setattr(
+        bc, "events", MagicMock(return_value={"events": [], "next_since": 0})
+    )
+    res = client.get("/api/device/events?since=0")
+    assert res.status_code == 422  # missing required query
+
+    res = client.get("/api/device/events?workflow_id=wf_1&since=0")
+    assert res.status_code == 200
+    bc.events.assert_called_once()
+    kwargs = bc.events.call_args.kwargs
+    assert kwargs.get("workflow_id") == "wf_1" or (
+        bc.events.call_args.args and "wf_1" in bc.events.call_args.args
+    )
+
+
+def test_http_coffee_load_start_propagate_ids(client, monkeypatch):
+    import bridge_client as bc
+
+    load_mock = MagicMock(
+        return_value={"workflow_id": "wf_loaded", "phase": "loaded"}
+    )
+    start_mock = MagicMock(
+        return_value={"workflow_id": "wf_loaded", "phase": "running"}
+    )
+    monkeypatch.setattr(bc, "coffee_load", load_mock)
+    monkeypatch.setattr(bc, "coffee_start", start_mock)
+
+    res = client.post(
+        "/api/device/coffee/load",
+        json={"recipe": "C:/r.yaml", "request_id": "req_load_1"},
+    )
+    assert res.status_code == 200
+    assert res.json()["workflow_id"] == "wf_loaded"
+    assert load_mock.call_args.kwargs["request_id"] == "req_load_1"
+
+    res = client.post(
+        "/api/device/coffee/start",
+        json={
+            "workflow_id": "wf_loaded",
+            "confirmation": "cup-filter-water-beans",
+            "request_id": "req_start_1",
+        },
+    )
+    assert res.status_code == 200
+    assert start_mock.call_args.kwargs["workflow_id"] == "wf_loaded"
+    assert start_mock.call_args.kwargs["request_id"] == "req_start_1"
+
+
+def test_http_stop_requires_workflow_unless_emergency(client, monkeypatch):
+    import bridge_client as bc
+
+    stop_mock = MagicMock(return_value={"ok": True})
+    monkeypatch.setattr(bc, "stop", stop_mock)
+
+    res = client.post("/api/device/stop", json={})
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert detail["category"] == "invalid_request"
+    stop_mock.assert_not_called()
+
+    res = client.post(
+        "/api/device/stop",
+        json={"emergency": True, "request_id": "req_em"},
+    )
+    assert res.status_code == 200
+    assert stop_mock.call_args.kwargs["emergency"] is True
+
+
+def test_http_bridge_error_category_mapping(client, monkeypatch):
+    import bridge_client as bc
+    from xbloom_ble.bridge import BridgeError
+
+    monkeypatch.setattr(
+        bc,
+        "pause",
+        MagicMock(
+            side_effect=BridgeError("no running bridge", category="daemon_not_running")
+        ),
+    )
+    res = client.post(
+        "/api/device/pause",
+        json={"workflow_id": "wf_1", "request_id": "r1"},
+    )
+    assert res.status_code == 503
+    detail = res.json()["detail"]
+    assert detail["category"] == "daemon_not_running"
+    assert "no running bridge" in detail["message"]
+
+    monkeypatch.setattr(
+        bc,
+        "pause",
+        MagicMock(
+            side_effect=BridgeError(
+                "device held elsewhere", category="device_busy_external"
+            )
+        ),
+    )
+    res = client.post(
+        "/api/device/pause",
+        json={"workflow_id": "wf_1", "request_id": "r2"},
+    )
+    assert res.status_code == 409
+    assert res.json()["detail"]["category"] == "device_busy_external"
+
+
+def test_http_disconnect_maps_daemon_not_running(client, monkeypatch):
+    import bridge_client as bc
+    from xbloom_ble.bridge import BridgeError
+
+    monkeypatch.setattr(
+        bc,
+        "disconnect",
+        MagicMock(
+            side_effect=BridgeError(
+                "no running bridge daemon to disconnect",
+                category="daemon_not_running",
+            )
+        ),
+    )
+    res = client.post("/api/device/disconnect")
+    assert res.status_code == 503
+    assert res.json()["detail"]["category"] == "daemon_not_running"
+
+
+def test_http_probe_uses_adapter_not_xbloom_client(client, monkeypatch):
+    import bridge_client as bc
+
+    probe_mock = MagicMock(
+        return_value={
+            "firmware": "x",
+            "model": "studio",
+            "serial_number": "SECRET",
+            "nested": {"token": "t"},
+        }
+    )
+    monkeypatch.setattr(bc, "probe", probe_mock)
+    res = client.get("/api/device/probe")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["command"] == "probe"
+    assert "serial_number" not in body
+    assert "token" not in body.get("nested", {})
+    probe_mock.assert_called_once()
+
+
+def test_http_status_observation_no_hardware(client, monkeypatch):
+    import bridge_client as bc
+
+    monkeypatch.setattr(
+        bc,
+        "status",
+        MagicMock(
+            return_value={
+                "running": True,
+                "available": True,
+                "active_workflow_id": "wf_live",
+                "phase": "running",
+            }
+        ),
+    )
+    res = client.get("/api/device/bridge")
+    assert res.status_code == 200
+    assert res.json()["active_workflow_id"] == "wf_live"
+    bc.status.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# MCP tools
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_status_does_not_ensure(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+
+    ensure = MagicMock(side_effect=AssertionError("must not ensure"))
+    monkeypatch.setattr(bc.client, "ensure_daemon", ensure)
+    monkeypatch.setattr(
+        bc, "status", MagicMock(return_value={"running": False, "available": False})
+    )
+    out = mcp_mod.xbloom_status()
+    assert out["running"] is False
+    ensure.assert_not_called()
+
+
+def test_mcp_events_requires_workflow_id(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+
+    monkeypatch.setattr(
+        bc, "events", MagicMock(return_value={"events": [], "next_since": 1})
+    )
+    out = mcp_mod.xbloom_events(workflow_id="")
+    assert out.get("category") == "invalid_request"
+    bc.events.assert_not_called()
+
+    out = mcp_mod.xbloom_events(workflow_id="wf_9", since=2)
+    assert out["next_since"] == 1
+    bc.events.assert_called_once()
+
+
+def test_mcp_start_requires_workflow_id(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+
+    monkeypatch.setattr(bc, "coffee_start", MagicMock())
+    out = mcp_mod.xbloom_coffee_start(
+        workflow_id="", confirmation="cup-filter-water-beans"
+    )
+    assert out.get("category") == "invalid_request"
+    bc.coffee_start.assert_not_called()
+
+
+def test_mcp_stop_emergency_may_omit_workflow(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+
+    stop_mock = MagicMock(return_value={"ok": True})
+    monkeypatch.setattr(bc, "stop", stop_mock)
+
+    out = mcp_mod.xbloom_stop()
+    assert out.get("category") == "invalid_request"
+    stop_mock.assert_not_called()
+
+    out = mcp_mod.xbloom_stop(emergency=True, request_id="req_e")
+    assert out.get("ok") is True
+    assert stop_mock.call_args.kwargs["emergency"] is True
+
+
+def test_mcp_structured_error_retains_category(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+    from xbloom_ble.bridge import BridgeError
+
+    monkeypatch.setattr(
+        bc,
+        "pause",
+        MagicMock(
+            side_effect=BridgeError("held by phone", category="device_busy_external")
+        ),
+    )
+    out = mcp_mod.xbloom_pause(workflow_id="wf_1", request_id="r1")
+    assert out["category"] == "device_busy_external"
+    assert "held by phone" in out["error"]
+
+
+def test_mcp_probe_uses_adapter(monkeypatch):
+    import mcp_server as mcp_mod
+    import bridge_client as bc
+
+    monkeypatch.setattr(
+        bc,
+        "probe",
+        MagicMock(return_value={"firmware": "f", "serial_number": "S", "token": "t"}),
+    )
+    out = mcp_mod.xbloom_probe()
+    assert out["command"] == "probe"
+    assert "serial_number" not in out
+    assert "token" not in out

@@ -1,13 +1,13 @@
 """xBloom Studio Web backend.
 
-A local FastAPI service that exposes the existing Skill capabilities
-(scan, probe, recipe validation, catalog, history, bridge status) over HTTP
-for the browser frontend.
+A local FastAPI service that exposes xBloom capabilities (scan, typed bridge
+control, recipe validation, catalog, history) over HTTP for the browser
+frontend.
 
-Startup and bridge-backed operations do not own BLE; those connections are
-held by the bridge daemon via bridge_client. Phase 0.6 still also exposes
-passive BLE scan and a one-shot direct probe (outside bridge_client). Full
-client convergence and race-safe typed RPC are Phase A/A9 targets.
+Startup ensures the bridge daemon process without connecting BLE. Hardware
+actions go through the typed Web adapter (``bridge_client`` → core
+``TypedBridgeClient``); only passive scan uses BLE discovery directly. Probe
+is a bridge one-shot. Shutdown never stops the independent daemon.
 
 Run from the backend directory:
 

@@ -1,17 +1,52 @@
 const BASE = "/api";
 
+/** One request_id per user click/action. Never reuse across retries. */
+export function newRequestId(prefix = "web"): string {
+  const uuid =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().replace(/-/g, "")
+      : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  return `${prefix}_${uuid}`;
+}
+
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (detail == null) return fallback;
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "object") {
+    const d = detail as { category?: unknown; message?: unknown; error?: unknown };
+    const category = typeof d.category === "string" ? d.category : "";
+    const message =
+      typeof d.message === "string"
+        ? d.message
+        : typeof d.error === "string"
+          ? d.error
+          : "";
+    if (category && message) return `${category}: ${message}`;
+    if (message) return message;
+    if (category) return category;
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(detail);
+}
+
+async function parseError(res: Response): Promise<Error> {
+  let detail: unknown = res.statusText;
+  try {
+    const body = await res.json();
+    detail = body.detail ?? body.error ?? body;
+  } catch {
+    /* keep statusText */
+  }
+  return new Error(`${res.status}: ${formatErrorDetail(detail, res.statusText)}`);
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? body.error ?? detail;
-    } catch {
-      /* keep statusText */
-    }
-    throw new Error(`${res.status}: ${detail}`);
-  }
+  if (!res.ok) throw await parseError(res);
   return res.json() as Promise<T>;
 }
 
@@ -21,8 +56,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
-  return data as T;
+  if (!res.ok) throw await parseError(res);
+  return res.json() as Promise<T>;
 }
 
 export type Machine = { name: string; address: string };
@@ -35,8 +70,8 @@ export type ScanResult = {
 
 export type ProbeResult = {
   command: string;
-  machine: string;
-  address: string;
+  machine?: string;
+  address?: string;
   firmware?: string;
   model?: string;
   weight_unit?: string;
@@ -61,6 +96,8 @@ export type BridgeState = {
   last_operation?: Record<string, unknown> | null;
   last_error?: string | null;
   recovery_records?: string[];
+  active_workflow_id?: string | null;
+  workflow?: Record<string, unknown> | null;
 };
 
 export type BridgeEvent = {
@@ -71,9 +108,14 @@ export type BridgeEvent = {
 };
 
 export type BridgeEventsResult = {
-  running: boolean;
+  running?: boolean;
   events: BridgeEvent[];
   next_since: number;
+};
+
+export type WorkflowResult = {
+  workflow_id?: string;
+  [key: string]: unknown;
 };
 
 export type Template = {
@@ -206,21 +248,46 @@ export const api = {
   probe: (address?: string) =>
     get<ProbeResult>(`/device/probe${address ? `?address=${encodeURIComponent(address)}` : ""}`),
   bridge: () => get<BridgeState>("/device/bridge"),
-  bridgeEvents: (since = 0) =>
-    get<BridgeEventsResult>(`/device/events?since=${since}`),
-  bridgeCall: async (
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> => {
-    const res = await fetch(`${BASE}/device/call`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ method, params }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(`${res.status}: ${data.detail ?? res.statusText}`);
-    return data as Record<string, unknown>;
-  },
+  bridgeEvents: (since: number, workflowId: string) =>
+    get<BridgeEventsResult>(
+      `/device/events?since=${since}&workflow_id=${encodeURIComponent(workflowId)}`,
+    ),
+  coffeeLoad: (recipe: string, requestId: string) =>
+    post<WorkflowResult>("/device/coffee/load", { recipe, request_id: requestId }),
+  coffeeStart: (workflowId: string, confirmation: string, requestId: string) =>
+    post<WorkflowResult>("/device/coffee/start", {
+      workflow_id: workflowId,
+      confirmation,
+      request_id: requestId,
+    }),
+  teaLoad: (recipe: string, requestId: string) =>
+    post<WorkflowResult>("/device/tea/load", { recipe, request_id: requestId }),
+  teaStart: (workflowId: string, confirmation: string, requestId: string) =>
+    post<WorkflowResult>("/device/tea/start", {
+      workflow_id: workflowId,
+      confirmation,
+      request_id: requestId,
+    }),
+  pause: (workflowId: string, requestId: string) =>
+    post<WorkflowResult>("/device/pause", {
+      workflow_id: workflowId,
+      request_id: requestId,
+    }),
+  resume: (workflowId: string, requestId: string) =>
+    post<WorkflowResult>("/device/resume", {
+      workflow_id: workflowId,
+      request_id: requestId,
+    }),
+  stop: (workflowId: string, requestId: string) =>
+    post<WorkflowResult>("/device/stop", {
+      workflow_id: workflowId,
+      request_id: requestId,
+    }),
+  cancel: (workflowId: string, requestId: string) =>
+    post<WorkflowResult>("/device/cancel", {
+      workflow_id: workflowId,
+      request_id: requestId,
+    }),
   templates: () => get<TemplatesResult>("/recipes/templates"),
   validate: (path: string) => post<ValidateResult>("/recipes/validate", { path }),
   catalogStatus: () => get<CatalogStatus>("/catalog/status"),
@@ -232,9 +299,8 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch(`${BASE}/catalog/import`, { method: "POST", body: form });
-    const data = await res.json();
-    if (!res.ok) throw new Error(`${res.status}: ${data.detail ?? res.statusText}`);
-    return data as CatalogImportResult;
+    if (!res.ok) throw await parseError(res);
+    return res.json() as Promise<CatalogImportResult>;
   },
   historyStatus: () => get<HistoryStatus>("/history/status"),
   historyList: (limit = 20) => get<HistoryListResult>(`/history/list?limit=${limit}`),

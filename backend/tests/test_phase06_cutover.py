@@ -1,12 +1,9 @@
-"""Phase 0.6 Web cutover tests.
+"""Phase 0.6 + retained startup contract tests.
 
 No BLE hardware, no real bridge daemon. Uses a temp XBLOOM_STATE_DIR and
-mocks core-owned ensure_bridge_daemon. Run from the backend directory with
-PYTHONPATH pointed at a local reviewed core source tree, e.g.:
+mocks core-owned ensure_bridge_daemon. Run from the backend directory:
 
-    $env:PYTHONPATH = "C:\\path\\to\\xbloom-studio-brew\\packages\\core"
-    $env:XBLOOM_STATE_DIR = (New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory }).FullName
-    python -m pytest tests/test_phase06_cutover.py -q
+    python -m pytest tests/ -q
 """
 
 from __future__ import annotations
@@ -18,7 +15,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Stable imports when pytest is run from backend/ (or repo root with backend on path).
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent
 
@@ -51,7 +47,7 @@ def test_main_source_has_no_skill_script_walk():
 
 
 def test_main_source_and_app_use_lifespan_not_on_event():
-    """Phase 0.6 wiring: FastAPI lifespan, no deprecated @app.on_event."""
+    """FastAPI lifespan, no deprecated @app.on_event."""
     src = _read(BACKEND_DIR / "main.py")
     assert "lifespan=lifespan" in src
     assert "@asynccontextmanager" in src
@@ -62,8 +58,6 @@ def test_main_source_and_app_use_lifespan_not_on_event():
 
     import main as main_mod
 
-    # FastAPI may wrap the user lifespan in a merger; require a non-null context
-    # and no deprecated on_event startup/shutdown handlers.
     assert main_mod.app.router.lifespan_context is not None
     assert callable(main_mod.app.router.lifespan_context)
     assert main_mod.app.router.on_startup == []
@@ -71,20 +65,41 @@ def test_main_source_and_app_use_lifespan_not_on_event():
     assert callable(main_mod.lifespan)
 
 
-def test_mcp_source_uses_ensure_not_skill_script_hint():
+def test_mcp_source_uses_typed_adapter_not_skill_script():
+    """A9: MCP uses typed bridge_client adapter; no Skill script paths."""
+    import ast
+
     src = _read(BACKEND_DIR / "mcp_server.py")
-    assert "ensure_bridge_daemon" in src
+    assert "import bridge_client" in src
     assert "XBLOOM_SKILL_SCRIPT" not in src
     assert "xbloom.py bridge start" not in src
     assert "scripts/xbloom.py" not in src
 
+    # Manual ensure / raw pass-through must not be imported or called (ignore docs).
+    tree = ast.parse(src)
+    imported: set[str] = set()
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.add(alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                called.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                called.add(func.attr)
+    assert "ensure_bridge_daemon" not in imported
+    assert "ensure_bridge_daemon" not in called
+    assert "bridge_call" not in imported
+    assert "bridge_call" not in called
+
 
 def test_no_skill_script_bridge_start_in_user_facing_sources():
-    """Standalone Web must not instruct users to run Skill scripts/xbloom.py.
-
-    Scans README, backend (excluding tests), and frontend/src. Needles are
-    assembled so this contract test file does not self-match.
-    """
+    """Standalone Web must not instruct users to run Skill scripts/xbloom.py."""
     script = "scripts/" + "xbloom.py"
     forbidden = (
         script + " bridge start",
@@ -135,10 +150,7 @@ def test_no_skill_script_bridge_start_in_user_facing_sources():
 
 
 def test_module_docs_do_not_claim_backend_never_holds_ble():
-    """Phase 0.6 still has passive scan + one-shot direct probe outside bridge_client.
-
-    Needles are assembled so this contract test does not self-match.
-    """
+    """Passive scan still uses BLE discovery outside the typed adapter."""
     forbidden = (
         "BLE ownership stays with" + " the existing bridge daemon",
         "never holds a BLE" + " connection of its own",
@@ -150,7 +162,7 @@ def test_module_docs_do_not_claim_backend_never_holds_ble():
         for needle in forbidden:
             assert needle not in src, (
                 f"{rel} must not claim {needle!r} "
-                "(Phase 0.6 still has direct probe/scan outside bridge_client)"
+                "(passive scan still uses BLE discovery)"
             )
 
 
@@ -194,7 +206,6 @@ def test_requirements_runtime_every_package_line_is_exact_pin():
     assert not any(
         "xbloom-studio-core" in line or "xbloom_studio_core" in line for line in runtime_pkgs
     )
-    # name[extras]==version  or  name==version  (no ranges, no unpinned)
     exact_pin = re.compile(
         r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[A-Za-z0-9][A-Za-z0-9._+-]*$"
     )
@@ -215,7 +226,6 @@ def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
     from unittest.mock import AsyncMock
 
     ensure_mock = AsyncMock()
-    # If main ever gained a stop helper, lifespan must not call it on exit.
     stop_mock = MagicMock(name="stop_bridge_daemon")
 
     with patch.object(main_mod, "_ensure_bridge_daemon", ensure_mock):
@@ -224,7 +234,6 @@ def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
             async def _run() -> None:
                 async with main_mod.lifespan(main_mod.app):
                     ensure_mock.assert_awaited_once_with()
-                # After context exit (shutdown path): still exactly one ensure.
                 ensure_mock.assert_awaited_once_with()
 
             asyncio.run(_run())
@@ -232,7 +241,6 @@ def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
     ensure_mock.assert_awaited_once_with()
     stop_mock.assert_not_called()
 
-    # Shutdown side of lifespan must not invoke ensure or stop the daemon.
     src = _read(BACKEND_DIR / "main.py")
     lifespan_body = src[src.index("async def lifespan") : src.index("\napp = FastAPI")]
     assert "await _ensure_bridge_daemon()" in lifespan_body
@@ -261,7 +269,6 @@ def test_startup_calls_ensure_exactly_once_without_script_arg(caplog):
             asyncio.run(main_mod._ensure_bridge_daemon())
 
     mock_ensure.assert_called_once_with()
-    # No positional script path.
     args, kwargs = mock_ensure.call_args
     assert args == ()
     assert kwargs == {}
@@ -334,7 +341,6 @@ def test_startup_exception_logs_and_does_not_crash(caplog):
     mock_ensure = MagicMock(side_effect=RuntimeError("spawn failed"))
     with patch.object(main_mod, "ensure_bridge_daemon", mock_ensure):
         with caplog.at_level(logging.ERROR, logger=main_mod.logger.name):
-            # Must not raise — HTTP backend stays up.
             asyncio.run(main_mod._ensure_bridge_daemon())
     assert any("failed to ensure bridge daemon" in r.message for r in caplog.records)
     assert any(r.exc_info for r in caplog.records)
@@ -363,133 +369,3 @@ def test_startup_uses_asyncio_to_thread():
     assert args == ()
     assert kwargs == {}
     mock_ensure.assert_called_once_with()
-
-
-# ---------------------------------------------------------------------------
-# MCP first-use ensure / reuse / not-ready
-# ---------------------------------------------------------------------------
-
-
-def test_mcp_require_bridge_ensures_and_returns_none_when_ready():
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={
-            "client_ready": True,
-            "ensured": True,
-            "upgrade_pending": False,
-            "status": "running",
-        }
-    )
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        err = mcp_mod._require_bridge()
-    assert err is None
-    mock_ensure.assert_called_once_with()
-
-
-def test_mcp_require_bridge_reuses_same_ensure_per_call():
-    """One tool call → one ensure; second tool call may ensure again (reuse path)."""
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={
-            "client_ready": True,
-            "ensured": True,
-            "already_running": True,
-            "upgrade_pending": False,
-        }
-    )
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        assert mcp_mod._require_bridge() is None
-        assert mcp_mod._require_bridge() is None
-    assert mock_ensure.call_count == 2
-    for call in mock_ensure.call_args_list:
-        assert call.args == ()
-        assert call.kwargs == {}
-
-
-def test_mcp_require_bridge_not_ready_returns_upgrade_pending():
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={
-            "client_ready": False,
-            "ensured": False,
-            "upgrade_pending": True,
-            "status": "upgrade_pending",
-            "message": "busy legacy daemon; not force-stopping",
-        }
-    )
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        err = mcp_mod._require_bridge()
-    assert err is not None
-    assert err.get("client_ready") is False
-    assert err.get("upgrade_pending") is True
-    assert "busy" in err["error"] or "not client-ready" in err["error"]
-    mock_ensure.assert_called_once_with()
-
-
-def test_mcp_require_bridge_exception_returns_error():
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(side_effect=OSError("cannot spawn"))
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        err = mcp_mod._require_bridge()
-    assert err is not None
-    assert err.get("client_ready") is False
-    assert "cannot spawn" in err["error"]
-
-
-def test_mcp_status_tool_does_not_double_ensure():
-    """xbloom_status calls _require_bridge once then bridge_call — one ensure total."""
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={"client_ready": True, "ensured": True, "upgrade_pending": False}
-    )
-    mock_call = MagicMock(return_value={"running": True, "activity": None})
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        with patch.object(mcp_mod, "bridge_call", mock_call):
-            result = mcp_mod.xbloom_status()
-    mock_ensure.assert_called_once_with()
-    mock_call.assert_called_once_with("status")
-    assert result.get("running") is True
-
-
-def test_mcp_status_surfaces_not_ready_without_bridge_call():
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={
-            "client_ready": False,
-            "upgrade_pending": True,
-            "status": "upgrade_pending",
-            "message": "preserving active work",
-        }
-    )
-    mock_call = MagicMock()
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        with patch.object(mcp_mod, "bridge_call", mock_call):
-            result = mcp_mod.xbloom_status()
-    mock_call.assert_not_called()
-    assert result.get("upgrade_pending") is True
-    assert result.get("client_ready") is False
-
-
-def test_mcp_config_mismatch_client_ready_still_proceeds():
-    import mcp_server as mcp_mod
-
-    mock_ensure = MagicMock(
-        return_value={
-            "client_ready": True,
-            "config_match": False,
-            "status": "config_mismatch_idle",
-            "idle_restart_recommended": True,
-        }
-    )
-    mock_call = MagicMock(return_value={"running": True})
-    with patch.object(mcp_mod, "ensure_bridge_daemon", mock_ensure):
-        with patch.object(mcp_mod, "bridge_call", mock_call):
-            result = mcp_mod.xbloom_status()
-    mock_call.assert_called_once()
-    assert result.get("running") is True
