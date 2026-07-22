@@ -221,24 +221,31 @@ def test_requirements_runtime_every_package_line_is_exact_pin():
 
 
 def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
-    """lifespan awaits _ensure_bridge_daemon once; shutdown does not stop bridge."""
+    """lifespan awaits _ensure_bridge_daemon once; shutdown may close design only.
+
+    Shutdown must never stop the independent bridge daemon. Closing the lazily
+    owned design httpx client is allowed.
+    """
     import main as main_mod
     from unittest.mock import AsyncMock
 
     ensure_mock = AsyncMock()
     stop_mock = MagicMock(name="stop_bridge_daemon")
+    close_design_mock = AsyncMock()
 
     with patch.object(main_mod, "_ensure_bridge_daemon", ensure_mock):
-        with patch.object(main_mod, "stop_bridge_daemon", stop_mock, create=True):
+        with patch.object(main_mod, "close_design_service", close_design_mock):
+            with patch.object(main_mod, "stop_bridge_daemon", stop_mock, create=True):
 
-            async def _run() -> None:
-                async with main_mod.lifespan(main_mod.app):
+                async def _run() -> None:
+                    async with main_mod.lifespan(main_mod.app):
+                        ensure_mock.assert_awaited_once_with()
                     ensure_mock.assert_awaited_once_with()
-                ensure_mock.assert_awaited_once_with()
 
-            asyncio.run(_run())
+                asyncio.run(_run())
 
     ensure_mock.assert_awaited_once_with()
+    close_design_mock.assert_awaited_once_with()
     stop_mock.assert_not_called()
 
     src = _read(BACKEND_DIR / "main.py")
@@ -246,7 +253,7 @@ def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
     assert "await _ensure_bridge_daemon()" in lifespan_body
     before_yield, after_yield = lifespan_body.split("yield", 1)
     assert "await _ensure_bridge_daemon()" in before_yield
-    assert "await " not in after_yield
+    assert "await close_design_service()" in after_yield
     assert "stop_bridge" not in after_yield
     assert "ensure_bridge_daemon" not in after_yield
 

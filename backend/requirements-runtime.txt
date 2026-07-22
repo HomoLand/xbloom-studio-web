@@ -6,3 +6,9 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 mcp==1.28.1
 starlette==0.41.3
+httpx==0.28.1
+Pillow==11.1.0
+jsonschema==4.23.0
+# Optional at install time for text-mode OCR (vision mode does not require it).
+# Runtime raises a clear capability error when OCR is needed but unavailable.
+pytesseract==0.3.13

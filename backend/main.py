@@ -20,6 +20,8 @@ Prerequisites:
     # Local core development (editable; no release wheel):
     pip install -r requirements-dev.txt
     set XBLOOM_ASSETS_DIR to the knowledge bundle's assets directory for templates
+    set XBLOOM_KNOWLEDGE_DIR to a validated knowledge bundle for POST /api/design
+    set XBLOOM_LLM_BASE_URL (required) and optional XBLOOM_LLM_* / XBLOOM_DESIGN_* vars
 """
 
 from __future__ import annotations
@@ -35,6 +37,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from design.body_limit import DesignRequestBodyLimitMiddleware
+from design.routes import (
+    close_design_service,
+    initialize_design_at_startup,
+    router as design_router,
+)
 from routes import catalog, device, history, recipes
 from xbloom_ble.bridge import ensure_bridge_daemon
 
@@ -109,11 +117,28 @@ async def _ensure_bridge_daemon() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """App lifespan: ensure bridge once on startup; never stop it on shutdown."""
+    """App lifespan: ensure bridge on startup; optional design validation; close design on shutdown.
+
+    When any design env is configured (LLM base URL, knowledge dir/dev root,
+    provider, or design mode), validate config/provider/knowledge during startup
+    so unsupported capabilities fail before the app accepts traffic rather than
+    on the first design call. No network LLM request and no BLE connect during
+    that validation. With no design env, design remains lazy (control-only
+    startup still works).
+
+    Never stops the independent bridge daemon on shutdown/reload so an
+    in-progress brew is not killed by a backend restart.
+    """
 
     await _ensure_bridge_daemon()
-    yield
-    # Deliberately do nothing on shutdown so the independent daemon is preserved.
+    # Eager design init only when design env is present; raises on misconfig during startup.
+    initialize_design_at_startup()
+    try:
+        yield
+    finally:
+        # Close design httpx client only if design was initialized.
+        # Does not construct a service merely to shut it down.
+        await close_design_service()
 
 
 app = FastAPI(
@@ -137,6 +162,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Bound POST /api/design body size before JSON/multipart parsing (structured 413).
+app.add_middleware(DesignRequestBodyLimitMiddleware)
+
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -147,6 +175,7 @@ app.include_router(device.router)
 app.include_router(recipes.router)
 app.include_router(catalog.router)
 app.include_router(history.router)
+app.include_router(design_router)
 
 # Serve the built frontend (SPA) from the same process.
 _frontend_env = os.environ.get("XBLOOM_FRONTEND_DIR", "").strip()

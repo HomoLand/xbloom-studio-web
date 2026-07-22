@@ -133,6 +133,49 @@ BLE bridge 是抢占式的单实例守护进程。OS 锁作用域是 **一个规
 - `bridge.lock` 是 OS 生命周期单实例锁；`bridge.json` 是认证后的 loopback 发现文件（非锁）。
 - 页面/MCP 进程退出只停止观察轮询，**不** cancel workflow、**不** release BLE。
 
+## AI 配方设计（Phase B）
+
+`POST /api/design` 接受文字（`application/json`）或文字+可选图片（`multipart/form-data`），经 provider adapter 生成结构化配方候选，再经 JSON Schema 与 core 校验后返回。本阶段**不会**把候选写入 catalog 或发给 bridge/BLE。
+
+### 配置
+
+| 变量 | 用途 | 默认 |
+|---|---|---|
+| `XBLOOM_KNOWLEDGE_DIR` | 已校验的版本化 knowledge bundle 根目录（含 `manifest.json`） | 无（必需，或见开发覆盖） |
+| `XBLOOM_KNOWLEDGE_DEV_ROOT` | **显式**开发覆盖根目录（绝不静默扫描 sibling checkout） | 无 |
+| `XBLOOM_LLM_PROVIDER` | adapter 类型（当前仅 `openai-compatible`） | `openai-compatible` |
+| `XBLOOM_LLM_BASE_URL` | OpenAI-compatible 端点根 URL（**不要**在文档中写入真实地址） | 无，**必需** |
+| `XBLOOM_LLM_MODEL` | 模型名 | `grok-4.5` |
+| `XBLOOM_LLM_API_KEY` | 模型密钥（secret；不进日志/响应） | 无 |
+| `XBLOOM_DESIGN_MODE` | `vision`（默认，图片发给模型）或 `text`（本地 OCR，只发文字） | `vision` |
+| `XBLOOM_DESIGN_MAX_IMAGE_BYTES` | 图片字节上限 | `5242880`（5 MiB） |
+| `XBLOOM_DESIGN_MAX_IMAGE_PIXELS` | 解码后像素上限 | `20000000` |
+| `XBLOOM_DESIGN_TIMEOUT_S` | 单次设计请求总超时 | `60` |
+| `XBLOOM_DESIGN_PROVIDER_TIMEOUT_S` | 单次 LLM provider 调用超时 | `45` |
+| `XBLOOM_DESIGN_OCR_TIMEOUT_S` | 本地 OCR（text 模式+图片）超时 | `15` |
+
+```powershell
+# 示例：本地开发（请换成你自己的 knowledge 与 LLM 端点，勿提交真实密钥）
+$env:XBLOOM_KNOWLEDGE_DIR = "C:\path\to\knowledge-1.2.0"
+# 或显式开发覆盖（无 manifest 时会内存构建并校验）：
+# $env:XBLOOM_KNOWLEDGE_DEV_ROOT = "C:\path\to\xbloom-studio-brew\skills\xbloom-studio-brew"
+$env:XBLOOM_LLM_BASE_URL = "http://127.0.0.1:PORT/v1"   # 占位，按本机 proxy 配置
+$env:XBLOOM_LLM_MODEL = "grok-4.5"
+$env:XBLOOM_LLM_API_KEY = "sk-..."   # 仅进程环境；勿写入仓库
+$env:XBLOOM_DESIGN_MODE = "vision"
+```
+
+### 隐私与安全行为
+
+- **图片**：请求内解码，校正方向后重编码以剥离 EXIF/元数据；原始与净化后的字节**均不落盘**，也不进入 catalog/历史。
+- **vision 模式**：净化后的图片字节仅用于当次 provider 调用；响应不含图片。
+- **text 模式**：若上传了图片，只做本地 OCR，**从不**把图片字节发给模型；缺少 OCR 能力时返回明确配置错误。Python 包 `pytesseract` 已列入 runtime 依赖；**外部 Tesseract OCR 二进制**仅在 text 模式且请求带图片时需要（vision 模式不需要）。
+- **密钥**：`XBLOOM_LLM_API_KEY` 只从环境读取，不出现在日志、HTTP 响应或 provenance。
+- **不可信输入**：用户文字、OCR 文本与**附件图片内容**均按不可信数据进入提示词（文字进 UNTRUSTED 围栏；图片像素/读出文字同策略），不能覆盖 system/knowledge，也不能请求密钥、本机路径或机器动作。`beverage` 仅接受规范化的 `coffee` / `tea`（或省略）。
+- **启动校验**：若显式配置了任一设计相关环境变量（`XBLOOM_LLM_BASE_URL`、`XBLOOM_KNOWLEDGE_DIR` / `XBLOOM_KNOWLEDGE_DEV_ROOT`、`XBLOOM_LLM_PROVIDER`、`XBLOOM_DESIGN_MODE`），进程启动时校验配置、provider 能力与 knowledge bundle（**不**发起 LLM 网络请求、**不**连接 BLE）；未配置设计 env 时设计服务保持懒加载，控制面可单独启动。
+- **输出**：最多一次受约束的结构修复；仍非法时返回可编辑候选 + 字段级错误 + `valid=false`，不保存。
+- **provenance**：含 provider/model、knowledge version/hash、prompt template version、candidate hash；不含 API key、原始图片、思维链或任意本机路径。
+
 ## 安全约束
 
 - Backend 只监听 `127.0.0.1`，不暴露到公网或局域网。
@@ -196,3 +239,4 @@ python mcp_server.py
 - Stage 1–3：只读浏览、配方详情/导入、遥测与受控冲煮、MCP 工具面。
 - Stage 4（Phase 0.6）：Web 使用 core `ensure_bridge_daemon()`；发布 pin GitHub wheel v1.2.0。
 - **Stage 5（Phase A9）**：HTTP/MCP 收敛到类型化 bridge 客户端；删除通用 `/api/device/call`；显式 `workflow_id` / `request_id`；probe 走 bridge；仅被动 scan 直连 discovery；无五分钟 loaded 过期；观察路径零 BLE/ensure 副作用。
+- **Stage 6（Phase B batch 1）**：`backend/design/` + `POST /api/design`（JSON/multipart）、knowledge 校验加载、OpenAI-compatible provider adapter、vision EXIF 净化 / text OCR、严格 schema + core 校验与单次 repair、provenance；未接 catalog 保存（B8/B9 后续）。
