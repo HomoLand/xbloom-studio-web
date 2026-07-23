@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from public_contract import sanitize_public_output
 from xbloom_ble.bridge import BridgeError, bridge_is_running, bridge_record_path
 from xbloom_ble.bridge_client import TypedBridgeClient
 
@@ -41,24 +42,15 @@ __all__ = [
     "water_start",
 ]
 
-# Never surface these keys in HTTP/MCP responses (nested values included).
-_REDACT_KEYS = frozenset({"serial_number", "token", "auth_token", "password", "secret"})
-
 
 def public_response(value: Any) -> Any:
-    """Recursively drop secret-bearing keys from bridge payloads."""
+    """Recursively sanitize bridge payloads for browser-facing surfaces.
 
-    if isinstance(value, dict):
-        return {
-            k: public_response(v)
-            for k, v in value.items()
-            if str(k).casefold() not in _REDACT_KEYS
-        }
-    if isinstance(value, list):
-        return [public_response(v) for v in value]
-    if isinstance(value, tuple):
-        return tuple(public_response(v) for v in value)
-    return value
+    Drops path/secret/raw-image/reasoning keys using whole-token semantics and
+    redacts absolute local paths in string leaves.
+    """
+
+    return sanitize_public_output(value)
 
 # Module-level long-lived client. Construction does not start the daemon or BLE.
 client = TypedBridgeClient(client_name="xbloom-studio-web")
@@ -155,19 +147,39 @@ def disconnect() -> dict[str, Any]:
 
 def coffee_load(
     *,
-    recipe: str,
+    recipe: str | None = None,
     request_id: str | None = None,
     address: str | None = None,
     scan_timeout: float = 8.0,
     recipe_revision_id: str | None = None,
 ) -> dict[str, Any]:
-    return client.coffee_load(
-        recipe=recipe,
-        request_id=request_id,
-        address=address,
-        scan_timeout=float(scan_timeout),
-        recipe_revision_id=recipe_revision_id,
+    """Load coffee by local path and/or durable revision id.
+
+    Browser HTTP passes ``recipe_revision_id`` only. MCP/Skill may pass a local
+    ``recipe`` path. At least one non-empty source is required; path-plus-
+    revision remains compatible with the core adapter. Empty values are
+    omitted so revision-only calls never invent a fake path for core.
+    """
+
+    has_recipe = recipe is not None and str(recipe).strip() != ""
+    has_rev = (
+        recipe_revision_id is not None and str(recipe_revision_id).strip() != ""
     )
+    if not has_recipe and not has_rev:
+        raise BridgeError(
+            "coffee.load requires a local recipe path or recipe_revision_id",
+            category="invalid_request",
+        )
+    kwargs: dict[str, Any] = {
+        "request_id": request_id,
+        "address": address,
+        "scan_timeout": float(scan_timeout),
+    }
+    if has_recipe:
+        kwargs["recipe"] = str(recipe)
+    if has_rev:
+        kwargs["recipe_revision_id"] = str(recipe_revision_id).strip()
+    return client.coffee_load(**kwargs)
 
 
 def coffee_start(
@@ -187,17 +199,38 @@ def coffee_start(
 
 def tea_load(
     *,
-    recipe: str,
+    recipe: str | None = None,
     request_id: str | None = None,
     address: str | None = None,
     scan_timeout: float = 8.0,
+    recipe_revision_id: str | None = None,
 ) -> dict[str, Any]:
-    return client.tea_load(
-        recipe=recipe,
-        request_id=request_id,
-        address=address,
-        scan_timeout=float(scan_timeout),
+    """Load tea by local path and/or durable revision id (parity with coffee).
+
+    Browser HTTP passes ``recipe_revision_id`` only. MCP/Skill may pass a local
+    ``recipe`` path. At least one non-empty source is required, and the core's
+    path-plus-revision compatibility is preserved.
+    """
+
+    has_recipe = recipe is not None and str(recipe).strip() != ""
+    has_rev = (
+        recipe_revision_id is not None and str(recipe_revision_id).strip() != ""
     )
+    if not has_recipe and not has_rev:
+        raise BridgeError(
+            "tea.load requires a local recipe path or recipe_revision_id",
+            category="invalid_request",
+        )
+    kwargs: dict[str, Any] = {
+        "request_id": request_id,
+        "address": address,
+        "scan_timeout": float(scan_timeout),
+    }
+    if has_recipe:
+        kwargs["recipe"] = str(recipe)
+    if has_rev:
+        kwargs["recipe_revision_id"] = str(recipe_revision_id).strip()
+    return client.tea_load(**kwargs)
 
 
 def tea_start(

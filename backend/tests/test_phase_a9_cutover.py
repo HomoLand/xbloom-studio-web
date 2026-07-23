@@ -431,13 +431,19 @@ def test_http_coffee_load_start_propagate_ids(client, monkeypatch):
     monkeypatch.setattr(bc, "coffee_load", load_mock)
     monkeypatch.setattr(bc, "coffee_start", start_mock)
 
+    # B9b: browser load is revision-only (no local recipe path field).
     res = client.post(
         "/api/device/coffee/load",
-        json={"recipe": "C:/r.yaml", "request_id": "req_load_1"},
+        json={
+            "recipe_revision_id": "rev_loaded_1",
+            "request_id": "req_load_1",
+        },
     )
     assert res.status_code == 200
     assert res.json()["workflow_id"] == "wf_loaded"
     assert load_mock.call_args.kwargs["request_id"] == "req_load_1"
+    assert load_mock.call_args.kwargs["recipe_revision_id"] == "rev_loaded_1"
+    assert load_mock.call_args.kwargs.get("recipe") in (None, "")
 
     res = client.post(
         "/api/device/coffee/start",
@@ -544,6 +550,8 @@ def test_http_probe_uses_adapter_not_xbloom_client(client, monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["command"] == "probe"
+    assert body.get("firmware") == "x"
+    assert body.get("model") == "studio"
     assert "serial_number" not in body
     assert "token" not in body.get("nested", {})
     probe_mock.assert_called_once()

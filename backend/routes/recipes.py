@@ -17,66 +17,25 @@ import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal, Mapping
+from typing import Any, Iterator, Literal
 
 import yaml
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from design.validation import validate_design_document
+from public_contract import (
+    SafeValidationRoute,
+    redact_paths,
+    reject_browser_unsafe_payload,
+)
 from xbloom_storage import (
     StorageConflictError,
     StorageError,
     canonicalize_recipe_content,
     content_sha256,
     open_store,
-    reject_forbidden_provenance,
 )
-
-
-# Absolute local paths only - never leak into HTTP error bodies.
-_WIN_ABS_PATH_RE = re.compile(r"(?i)\b[a-z]:(?:\\+|/+)\S*")
-_POSIX_ABS_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9_])/(?:home|Users|tmp|var|etc|root|opt|usr|private|"
-    r"mnt|srv|data|run|Volumes|workspace|app)/[^\s\"'<>|]+"
-)
-
-
-class SafeValidationRoute(APIRoute):
-    """Return validation details without echoing the rejected request input."""
-
-    def get_route_handler(self):
-        original_handler = super().get_route_handler()
-
-        async def safe_handler(request: Request):
-            try:
-                return await original_handler(request)
-            except RequestValidationError as exc:
-                errors = [
-                    {
-                        "type": str(error.get("type") or "validation_error"),
-                        "loc": [str(part) for part in error.get("loc", ())],
-                        "message": _redact_paths(
-                            str(error.get("msg") or "invalid request")
-                        ),
-                    }
-                    for error in exc.errors()
-                ]
-                return JSONResponse(
-                    status_code=422,
-                    content={
-                        "detail": {
-                            "category": "validation",
-                            "message": "request validation failed",
-                            "errors": errors,
-                        }
-                    },
-                )
-
-        return safe_handler
 
 
 router = APIRouter(
@@ -90,66 +49,7 @@ _SOURCE_WEB_DESIGN = "web-design"
 _CREATION_WEB = "web"
 _CREATION_WEB_DESIGN = "web-design"
 
-# ---------------------------------------------------------------------------
-# Browser-unsafe request rejection (keys + absolute path string values)
-# ---------------------------------------------------------------------------
-
-_CAMEL_BOUNDARY_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
-_BROWSER_ONLY_FORBIDDEN_TOKENS = frozenset({"command", "shell"})
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-
-
-def _browser_only_forbidden_key(key: str) -> bool:
-    """Reject command-bearing fields not covered by core provenance policy."""
-
-    tokens: list[str] = []
-    for chunk in re.split(r"[^A-Za-z0-9]+", str(key)):
-        tokens.extend(piece.lower() for piece in _CAMEL_BOUNDARY_RE.findall(chunk))
-    return any(token in _BROWSER_ONLY_FORBIDDEN_TOKENS for token in tokens)
-
-
-def _contains_absolute_local_path(value: str) -> bool:
-    """True when a string value embeds a Windows or POSIX absolute local path."""
-
-    if value.strip().casefold().startswith("file://"):
-        return True
-    if _WIN_ABS_PATH_RE.search(value):
-        return True
-    if _POSIX_ABS_PATH_RE.search(value):
-        return True
-    return False
-
-
-def reject_browser_unsafe_payload(value: Any, *, path: str = "$") -> None:
-    """Recursively reject forbidden keys and absolute local path string values.
-
-    Raises ``ValueError`` (FastAPI -> 422) so unsafe data never reaches storage.
-    """
-
-    try:
-        reject_forbidden_provenance(value, path=path)
-    except StorageError as exc:
-        raise ValueError(str(exc)) from exc
-
-    def walk(current: Any, current_path: str) -> None:
-        if isinstance(current, Mapping):
-            for key, child in current.items():
-                key_s = str(key)
-                child_path = f"{current_path}.{key_s}"
-                if _browser_only_forbidden_key(key_s):
-                    raise ValueError(f"forbidden field {key_s!r} at {child_path}")
-                walk(child, child_path)
-            return
-        if isinstance(current, (list, tuple)):
-            for index, child in enumerate(current):
-                walk(child, f"{current_path}[{index}]")
-            return
-        if isinstance(current, str) and _contains_absolute_local_path(current):
-            raise ValueError(
-                f"absolute local path values are not allowed at {current_path}"
-            )
-
-    walk(value, path)
 
 
 # ---------------------------------------------------------------------------
@@ -261,18 +161,12 @@ class FromDesignBody(StrictRequestModel):
 # ---------------------------------------------------------------------------
 
 
-def _redact_paths(message: str) -> str:
-    out = _WIN_ABS_PATH_RE.sub("[redacted-path]", message)
-    out = _POSIX_ABS_PATH_RE.sub("[redacted-path]", out)
-    return out
-
-
 def _error_detail(category: str, message: str) -> dict[str, Any]:
     """Device-style detail: ``detail.category`` / ``detail.message`` (not nested)."""
 
     return {
         "category": category,
-        "message": _redact_paths(message),
+        "message": redact_paths(message),
     }
 
 
@@ -403,7 +297,7 @@ def validate_recipe(body: ValidateBody) -> dict[str, Any]:
             "valid": False,
             "error": {
                 "category": "validation",
-                "message": _redact_paths(str(exc)),
+                "message": redact_paths(str(exc)),
                 "type": type(exc).__name__,
             },
         }

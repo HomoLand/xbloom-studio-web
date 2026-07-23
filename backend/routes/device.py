@@ -1,8 +1,12 @@
-"""Device discovery and typed bridge control routes (Phase A9).
+"""Device discovery and typed bridge control routes (Phase A9 / B9b).
 
 Passive GET /scan is the only path that uses ``xbloom_ble.client`` discovery.
 Probe and all hardware mutations go through the typed Web bridge adapter.
 There is no generic ``POST /call`` pass-through.
+
+Browser HTTP load endpoints accept ``recipe_revision_id`` only (no local path).
+All bridge/status/events/mutation responses pass through the shared public
+output sanitizer; bridge errors are path-redacted.
 """
 
 from __future__ import annotations
@@ -11,13 +15,23 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import bridge_client as bc
+from public_contract import (
+    SafeValidationRoute,
+    redact_paths,
+    reject_browser_unsafe_payload,
+    sanitize_public_output,
+)
 from xbloom_ble.bridge import BridgeError
 
 
-router = APIRouter(prefix="/api/device", tags=["device"])
+router = APIRouter(
+    prefix="/api/device",
+    tags=["device"],
+    route_class=SafeValidationRoute,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +97,7 @@ def _http_status_for_bridge_error(exc: BridgeError) -> int:
             "required",
         )
     ) and "busy" not in message:
-        # Missing/invalid caller inputs → 400; leave real conflicts to 409.
+        # Missing/invalid caller inputs -> 400; leave real conflicts to 409.
         if "workflow" in message and any(
             m in message for m in ("mismatch", "conflict", "not match", "active")
         ):
@@ -102,8 +116,17 @@ def _raise_bridge_http(exc: BridgeError) -> None:
     category = getattr(exc, "category", None) or "bridge_error"
     raise HTTPException(
         status_code=_http_status_for_bridge_error(exc),
-        detail={"category": str(category), "message": str(exc)},
+        detail={
+            "category": str(category),
+            "message": redact_paths(str(exc)),
+        },
     ) from exc
+
+
+def _public(result: Any) -> Any:
+    """Sanitize bridge payloads before they leave the browser HTTP boundary."""
+
+    return sanitize_public_output(result)
 
 
 async def _to_thread(fn, /, *args, **kwargs):
@@ -115,43 +138,57 @@ async def _to_thread(fn, /, *args, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-class LoadBody(BaseModel):
-    recipe: str
+class StrictDeviceBody(BaseModel):
+    """Forbid extras and browser-unsafe payloads on device mutation bodies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_browser_unsafe(cls, data: Any) -> Any:
+        if data is not None:
+            reject_browser_unsafe_payload(data)
+        return data
+
+
+class LoadBody(StrictDeviceBody):
+    """Browser load body: durable revision only. No recipe path field."""
+
+    recipe_revision_id: str = Field(min_length=1)
     request_id: str | None = None
     address: str | None = None
     scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
-    recipe_revision_id: str | None = None
 
 
-class StartBody(BaseModel):
+class StartBody(StrictDeviceBody):
     workflow_id: str
     confirmation: str
     request_id: str | None = None
 
 
-class WorkflowMutationBody(BaseModel):
+class WorkflowMutationBody(StrictDeviceBody):
     workflow_id: str
     request_id: str | None = None
 
 
-class StopCancelBody(BaseModel):
+class StopCancelBody(StrictDeviceBody):
     workflow_id: str | None = None
     request_id: str | None = None
     emergency: bool = False
 
 
-class RecoveryBody(BaseModel):
+class RecoveryBody(StrictDeviceBody):
     workflow_id: str
     address: str | None = None
     scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
-class ConnectBody(BaseModel):
+class ConnectBody(StrictDeviceBody):
     address: str | None = None
     scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
-class ProbeBody(BaseModel):
+class ProbeBody(StrictDeviceBody):
     address: str | None = None
     scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
 
@@ -168,14 +205,16 @@ async def scan_devices(timeout: float = Query(8.0, ge=1.0, le=30.0)) -> dict[str
     from xbloom_ble.client import scan
 
     devices = await scan(timeout=timeout)
-    return {
-        "command": "scan",
-        "count": len(devices),
-        "machines": [
-            {"name": getattr(d, "name", None) or "xBloom", "address": d.address}
-            for d in devices
-        ],
-    }
+    return _public(
+        {
+            "command": "scan",
+            "count": len(devices),
+            "machines": [
+                {"name": getattr(d, "name", None) or "xBloom", "address": d.address}
+                for d in devices
+            ],
+        }
+    )
 
 
 @router.get("/probe")
@@ -191,10 +230,10 @@ async def probe_machine(
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
-    cleaned = bc.public_response(result)
+    cleaned = _public(result)
     if not isinstance(cleaned, dict):
         cleaned = {"result": cleaned}
-    return {"command": "probe", **cleaned}
+    return _public({"command": "probe", **cleaned})
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +245,7 @@ async def probe_machine(
 async def bridge_state() -> dict[str, Any]:
     """Report bridge daemon status. Does not start the daemon or connect BLE."""
 
-    return await _to_thread(bc.status)
+    return _public(await _to_thread(bc.status))
 
 
 @router.get("/events")
@@ -217,8 +256,8 @@ async def bridge_events_endpoint(
     """Poll bridge events for an explicit workflow_id. Observation only."""
 
     try:
-        return await _to_thread(
-            bc.events, since=int(since), workflow_id=workflow_id
+        return _public(
+            await _to_thread(bc.events, since=int(since), workflow_id=workflow_id)
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -232,10 +271,12 @@ async def bridge_events_endpoint(
 @router.post("/connect")
 async def bridge_connect(body: ConnectBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.connect,
-            address=body.address,
-            scan_timeout=float(body.scan_timeout),
+        return _public(
+            await _to_thread(
+                bc.connect,
+                address=body.address,
+                scan_timeout=float(body.scan_timeout),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -246,7 +287,7 @@ async def bridge_disconnect() -> dict[str, Any]:
     """Release an explicit debug link. Never starts a missing daemon."""
 
     try:
-        return await _to_thread(bc.disconnect)
+        return _public(await _to_thread(bc.disconnect))
     except BridgeError as exc:
         _raise_bridge_http(exc)
 
@@ -258,14 +299,17 @@ async def bridge_disconnect() -> dict[str, Any]:
 
 @router.post("/coffee/load")
 async def coffee_load(body: LoadBody) -> dict[str, Any]:
+    """Load coffee by durable ``recipe_revision_id`` only (no local path)."""
+
     try:
-        return await _to_thread(
-            bc.coffee_load,
-            recipe=body.recipe,
-            request_id=body.request_id,
-            address=body.address,
-            scan_timeout=float(body.scan_timeout),
-            recipe_revision_id=body.recipe_revision_id,
+        return _public(
+            await _to_thread(
+                bc.coffee_load,
+                recipe_revision_id=body.recipe_revision_id,
+                request_id=body.request_id,
+                address=body.address,
+                scan_timeout=float(body.scan_timeout),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -274,11 +318,13 @@ async def coffee_load(body: LoadBody) -> dict[str, Any]:
 @router.post("/coffee/start")
 async def coffee_start(body: StartBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.coffee_start,
-            workflow_id=body.workflow_id,
-            confirmation=body.confirmation,
-            request_id=body.request_id,
+        return _public(
+            await _to_thread(
+                bc.coffee_start,
+                workflow_id=body.workflow_id,
+                confirmation=body.confirmation,
+                request_id=body.request_id,
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -286,13 +332,17 @@ async def coffee_start(body: StartBody) -> dict[str, Any]:
 
 @router.post("/tea/load")
 async def tea_load(body: LoadBody) -> dict[str, Any]:
+    """Load tea by durable ``recipe_revision_id`` only (no local path)."""
+
     try:
-        return await _to_thread(
-            bc.tea_load,
-            recipe=body.recipe,
-            request_id=body.request_id,
-            address=body.address,
-            scan_timeout=float(body.scan_timeout),
+        return _public(
+            await _to_thread(
+                bc.tea_load,
+                recipe_revision_id=body.recipe_revision_id,
+                request_id=body.request_id,
+                address=body.address,
+                scan_timeout=float(body.scan_timeout),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -301,11 +351,13 @@ async def tea_load(body: LoadBody) -> dict[str, Any]:
 @router.post("/tea/start")
 async def tea_start(body: StartBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.tea_start,
-            workflow_id=body.workflow_id,
-            confirmation=body.confirmation,
-            request_id=body.request_id,
+        return _public(
+            await _to_thread(
+                bc.tea_start,
+                workflow_id=body.workflow_id,
+                confirmation=body.confirmation,
+                request_id=body.request_id,
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -319,8 +371,10 @@ async def tea_start(body: StartBody) -> dict[str, Any]:
 @router.post("/pause")
 async def pause(body: WorkflowMutationBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.pause, workflow_id=body.workflow_id, request_id=body.request_id
+        return _public(
+            await _to_thread(
+                bc.pause, workflow_id=body.workflow_id, request_id=body.request_id
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -329,8 +383,10 @@ async def pause(body: WorkflowMutationBody) -> dict[str, Any]:
 @router.post("/resume")
 async def resume(body: WorkflowMutationBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.resume, workflow_id=body.workflow_id, request_id=body.request_id
+        return _public(
+            await _to_thread(
+                bc.resume, workflow_id=body.workflow_id, request_id=body.request_id
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -350,11 +406,13 @@ async def stop(body: StopCancelBody) -> dict[str, Any]:
             },
         )
     try:
-        return await _to_thread(
-            bc.stop,
-            workflow_id=body.workflow_id,
-            request_id=body.request_id,
-            emergency=bool(body.emergency),
+        return _public(
+            await _to_thread(
+                bc.stop,
+                workflow_id=body.workflow_id,
+                request_id=body.request_id,
+                emergency=bool(body.emergency),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -374,11 +432,13 @@ async def cancel(body: StopCancelBody) -> dict[str, Any]:
             },
         )
     try:
-        return await _to_thread(
-            bc.cancel,
-            workflow_id=body.workflow_id,
-            request_id=body.request_id,
-            emergency=bool(body.emergency),
+        return _public(
+            await _to_thread(
+                bc.cancel,
+                workflow_id=body.workflow_id,
+                request_id=body.request_id,
+                emergency=bool(body.emergency),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)
@@ -387,11 +447,13 @@ async def cancel(body: StopCancelBody) -> dict[str, Any]:
 @router.post("/recovery/reconcile")
 async def recovery_reconcile(body: RecoveryBody) -> dict[str, Any]:
     try:
-        return await _to_thread(
-            bc.recovery_reconcile,
-            workflow_id=body.workflow_id,
-            address=body.address,
-            scan_timeout=float(body.scan_timeout),
+        return _public(
+            await _to_thread(
+                bc.recovery_reconcile,
+                workflow_id=body.workflow_id,
+                address=body.address,
+                scan_timeout=float(body.scan_timeout),
+            )
         )
     except BridgeError as exc:
         _raise_bridge_http(exc)

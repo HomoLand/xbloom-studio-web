@@ -286,22 +286,19 @@ async def _parse_json_request(request: Request) -> DesignInput:
 async def _parse_multipart_request(request: Request) -> DesignInput:
     """Parse multipart form: text + optional image.
 
-    Bounds form parts via Starlette (max_files/fields/part_size) and defensively
-    reads at most ``max_image_bytes + 1`` from the upload stream. Uses
+    Bounds file/field counts via Starlette and defensively reads at most
+    ``max_image_bytes + 1`` from the upload stream. The ASGI body-limit
+    middleware bounds the entire multipart body before parsing. Uses
     ``async with request.form(...)`` so every UploadFile is closed on all
     success and error paths (unknown fields, validation, oversize, read failure).
     """
 
     service = get_design_service()
     max_image_bytes = service.config.max_image_bytes
-    # Part budget: image is the largest allowed part; text/beverage are tiny.
-    max_part_size = max(max_image_bytes, DESIGN_TEXT_MAX_CHARS + 64)
-
     try:
         async with request.form(
             max_files=1,
             max_fields=3,
-            max_part_size=max_part_size,
         ) as form:
             return await _parse_multipart_form(form, max_image_bytes=max_image_bytes)
     except DesignError:
@@ -309,12 +306,12 @@ async def _parse_multipart_request(request: Request) -> DesignInput:
     except Exception as exc:
         # Starlette raises on oversize parts / too many fields; treat as client error.
         message = str(exc).lower()
-        if "part" in message and ("large" in message or "exceed" in message or "max" in message):
+        if "part" in message and ("large" in message or "exceed" in message):
             raise DesignValidationError(
-                f"multipart part exceeds max size of {max_part_size} bytes",
+                f"multipart part exceeds max size of {max_image_bytes} bytes",
                 code="image_too_large",
                 status_code=413,
-                details={"max_bytes": max_part_size},
+                details={"max_bytes": max_image_bytes},
             ) from exc
         raise DesignValidationError(
             "malformed multipart body",
