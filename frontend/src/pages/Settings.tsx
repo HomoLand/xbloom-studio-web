@@ -302,34 +302,52 @@ export default function Settings() {
           </dl>
           {driver === "web-bluetooth" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={bleBusy || bleSnapshot.phase === "connecting"}
-                onClick={() => {
-                  setBleBusy(true);
-                  setBleActionError(null);
-                  void connectBle()
-                    .catch((e) =>
-                      setBleActionError(
-                        e instanceof Error ? e.message : String(e),
-                      ),
-                    )
-                    .finally(() => setBleBusy(false));
-                }}
-              >
-                <Bluetooth className="h-3.5 w-3.5" aria-hidden />
-                {bleSnapshot.phase === "connected"
-                  ? "Reconnect"
-                  : "Connect Studio"}
-              </Button>
+              {bleSnapshot.phase === "connecting" ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={bleBusy}
+                  onClick={() => {
+                    bleSession.abortConnect();
+                    setBleBusy(false);
+                    setBleActionError(null);
+                  }}
+                >
+                  Cancel connecting
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={bleBusy}
+                  onClick={() => {
+                    // Do not setState before connect: first await must stay
+                    // requestDevice() for Chrome's user-gesture rule.
+                    setBleActionError(null);
+                    setBleBusy(true);
+                    void connectBle()
+                      .catch((e) =>
+                        setBleActionError(
+                          e instanceof Error ? e.message : String(e),
+                        ),
+                      )
+                      .finally(() => setBleBusy(false));
+                  }}
+                >
+                  <Bluetooth className="h-3.5 w-3.5" aria-hidden />
+                  {bleSnapshot.phase === "connected"
+                    ? "Reconnect"
+                    : "Connect Studio"}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="secondary"
                 disabled={
                   bleBusy ||
                   bleSnapshot.phase === "idle" ||
-                  bleSnapshot.phase === "disconnected"
+                  bleSnapshot.phase === "disconnected" ||
+                  bleSnapshot.phase === "connecting"
                 }
                 onClick={() => {
                   setBleBusy(true);
@@ -348,7 +366,7 @@ export default function Settings() {
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={bleBusy}
+                disabled={bleBusy || bleSnapshot.phase === "connecting"}
                 onClick={() => {
                   setBleBusy(true);
                   setBleActionError(null);
