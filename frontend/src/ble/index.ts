@@ -39,7 +39,21 @@ export {
   shouldEnterTerminalPhase,
   type SessionPhase,
   type SessionSnapshot,
+  type BrewJournalMeta,
 } from "./session";
+export {
+  buildScaleEnter,
+  buildScaleExit,
+  buildScaleTare,
+  buildGrinderEnter,
+  buildGrinderStart,
+  buildGrinderStop,
+  buildGrinderQuit,
+  buildBrewerEnter,
+  buildBrewerStart,
+  buildBrewerStop,
+  buildBrewerQuit,
+} from "./extras";
 export {
   parseNotification,
   notificationFrameIsValid,

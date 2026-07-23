@@ -1,10 +1,30 @@
 /**
  * Web Bluetooth machine session (W0–W3).
  * Page lifetime = session lifetime (tab-close recovery out of scope).
+ *
+ * Also records local brew journal + telemetry samples, and exposes FreeSolo
+ * scale / grinder / hot-water control builders (same frames as core protocol).
  */
 
 import type { CoffeeRecipeContent } from "../api";
+import {
+  appendLocalHistory,
+  type TelemetrySample,
+} from "../lib/localHistory.ts";
 import { coffeeContentToProtocol } from "./coffeeRecipe.ts";
+import {
+  buildBrewerEnter,
+  buildBrewerQuit,
+  buildBrewerStart,
+  buildBrewerStop,
+  buildGrinderEnter,
+  buildGrinderQuit,
+  buildGrinderStart,
+  buildGrinderStop,
+  buildScaleEnter,
+  buildScaleExit,
+  buildScaleTare,
+} from "./extras.ts";
 import { buildCancel, buildCommit, buildStart } from "./framing.ts";
 import {
   connectGatt,
@@ -25,6 +45,17 @@ import {
   parseNotification,
   type StatusEvent,
 } from "./telemetry.ts";
+
+/** Throttle telemetry samples to keep localStorage small. */
+const TELEMETRY_SAMPLE_MIN_MS = 400;
+const TELEMETRY_MAX_SAMPLES = 600;
+
+export type BrewJournalMeta = {
+  recipe_name?: string;
+  recipe_revision_id?: string;
+  workflow_id?: string;
+  kind?: string;
+};
 
 export type SessionPhase =
   | "idle"
@@ -96,6 +127,13 @@ export class WebBleSession {
   private terminalWatch: ReturnType<typeof setInterval> | null = null;
   private onDisconnected: (() => void) | null = null;
 
+  /** Active brew journal context (set from UI before load/start). */
+  private brewMeta: BrewJournalMeta | null = null;
+  private brewStartedAtMs: number | null = null;
+  private telemetrySamples: TelemetrySample[] = [];
+  private lastSampleAtMs = 0;
+  private historyFlushed = false;
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     listener(this.snapshot());
@@ -134,6 +172,79 @@ export class WebBleSession {
     this.emit();
   }
 
+  /**
+   * Attach recipe metadata for the next brew so terminal/cancel can journal it.
+   * Call before loadCoffee / startBrew from the UI.
+   */
+  beginBrewJournal(meta: BrewJournalMeta): void {
+    this.brewMeta = { ...meta };
+    this.brewStartedAtMs = Date.now();
+    this.telemetrySamples = [];
+    this.lastSampleAtMs = 0;
+    this.historyFlushed = false;
+  }
+
+  private maybeSampleTelemetry(): void {
+    const active =
+      this.phase === "loading" ||
+      this.phase === "armed" ||
+      this.phase === "starting" ||
+      this.phase === "brewing" ||
+      this.phase === "terminal";
+    if (!active || this.brewStartedAtMs == null) return;
+    const now = Date.now();
+    if (
+      this.telemetrySamples.length > 0 &&
+      now - this.lastSampleAtMs < TELEMETRY_SAMPLE_MIN_MS
+    ) {
+      return;
+    }
+    if (this.telemetrySamples.length >= TELEMETRY_MAX_SAMPLES) return;
+    this.lastSampleAtMs = now;
+    this.telemetrySamples.push({
+      t: now - this.brewStartedAtMs,
+      state: this.machineState,
+      stateName: this.machineStateName,
+      cupWeightG: this.cupWeightG,
+      dispensedWaterMl: this.dispensedWaterMl,
+    });
+  }
+
+  private flushBrewHistory(outcome: string, note?: string): void {
+    if (this.historyFlushed) return;
+    // Only journal when we had an active brew path (meta or samples).
+    if (!this.brewMeta && this.telemetrySamples.length === 0) return;
+    this.historyFlushed = true;
+    // Final sample at terminal.
+    this.maybeSampleTelemetry();
+    try {
+      appendLocalHistory({
+        outcome,
+        source: "web-bluetooth",
+        recipe_name: this.brewMeta?.recipe_name,
+        recipe_revision_id: this.brewMeta?.recipe_revision_id,
+        workflow_id: this.brewMeta?.workflow_id,
+        kind: this.brewMeta?.kind ?? "coffee",
+        note,
+        machine: this.device?.name ?? this.handles?.device.name ?? undefined,
+        telemetry: this.telemetrySamples.slice(),
+      });
+    } catch {
+      /* localStorage full / private mode — never break brew path */
+    }
+    this.brewMeta = null;
+    this.brewStartedAtMs = null;
+    this.telemetrySamples = [];
+  }
+
+  private outcomeFromMachineState(): string {
+    const s = this.machineState;
+    if (s === 0x24 || s === 0x41) return "completed";
+    if (s === 0x1f) return "failed";
+    if (s === 0x01) return "completed"; // idle after brew path
+    return "completion_unconfirmed";
+  }
+
   private applyEvent(ev: StatusEvent): void {
     this.notifyCount += 1;
     if (ev.state != null) {
@@ -150,10 +261,13 @@ export class WebBleSession {
       }
       if (shouldEnterTerminalPhase(this.phase, ev.state)) {
         this.phase = "terminal";
+        this.maybeSampleTelemetry();
+        this.flushBrewHistory(this.outcomeFromMachineState());
       }
     }
     if (ev.cupWeightG != null) this.cupWeightG = ev.cupWeightG;
     if (ev.dispensedWaterMl != null) this.dispensedWaterMl = ev.dispensedWaterMl;
+    this.maybeSampleTelemetry();
     this.emit();
   }
 
@@ -331,12 +445,24 @@ export class WebBleSession {
    */
   async loadCoffee(
     content: CoffeeRecipeContent,
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; journal?: BrewJournalMeta } = {},
   ): Promise<void> {
     if (!this.handles || (this.phase !== "connected" && this.phase !== "armed" && this.phase !== "terminal")) {
       if (!this.handles || this.phase === "idle" || this.phase === "disconnected" || this.phase === "error") {
         throw new BleGattError("Connect to the machine before loading.", "not_connected");
       }
+    }
+    if (opts.journal) {
+      this.beginBrewJournal({
+        ...opts.journal,
+        recipe_name: opts.journal.recipe_name ?? content.name,
+        kind: opts.journal.kind ?? content.kind,
+      });
+    } else if (!this.brewMeta) {
+      this.beginBrewJournal({
+        recipe_name: content.name,
+        kind: content.kind,
+      });
     }
     const frames = buildLoadFrames(coffeeContentToProtocol(content));
     this.loaded = false;
@@ -448,8 +574,58 @@ export class WebBleSession {
       await sleep(100);
     }
     this.phase = "terminal";
+    this.maybeSampleTelemetry();
+    this.flushBrewHistory("cancelled");
     this.emit();
     await this.disconnect();
+  }
+
+  // ---------------------------------------------------------------------------
+  // FreeSolo extras: scale / grinder / hot water (parity with core protocol)
+  // ---------------------------------------------------------------------------
+
+  async scaleEnter(): Promise<void> {
+    await this.requireWrite(buildScaleEnter());
+  }
+  async scaleTare(): Promise<void> {
+    await this.requireWrite(buildScaleTare());
+  }
+  async scaleExit(): Promise<void> {
+    await this.requireWrite(buildScaleExit());
+  }
+
+  async grinderEnter(grind: number, rpm: number): Promise<void> {
+    await this.requireWrite(buildGrinderEnter(grind, rpm));
+  }
+  async grinderStart(grind: number, rpm: number): Promise<void> {
+    await this.requireWrite(buildGrinderStart(grind, rpm));
+  }
+  async grinderStop(): Promise<void> {
+    await this.requireWrite(buildGrinderStop());
+  }
+  async grinderQuit(): Promise<void> {
+    await this.requireWrite(buildGrinderQuit());
+  }
+
+  async waterEnter(tempC: number, pattern = "center"): Promise<void> {
+    await this.requireWrite(buildBrewerEnter(tempC, pattern));
+  }
+  async waterStart(
+    volumeMl: number,
+    tempC: number,
+    flowMlS = 3.5,
+    pattern = "center",
+    waterFeed: 0 | 1 = 0,
+  ): Promise<void> {
+    await this.requireWrite(
+      buildBrewerStart(volumeMl, tempC, flowMlS, pattern, waterFeed),
+    );
+  }
+  async waterStop(): Promise<void> {
+    await this.requireWrite(buildBrewerStop());
+  }
+  async waterQuit(): Promise<void> {
+    await this.requireWrite(buildBrewerQuit());
   }
 
   private watchTerminalAndRelease(): void {
@@ -457,6 +633,8 @@ export class WebBleSession {
     this.terminalWatch = setInterval(() => {
       if (this.phase === "terminal") {
         this.stopTerminalWatch();
+        // Ensure history is flushed even if terminal came only via phase flag.
+        this.flushBrewHistory(this.outcomeFromMachineState());
         void this.disconnect();
       }
     }, 250);

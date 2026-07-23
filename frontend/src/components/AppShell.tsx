@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Settings,
   Sparkles,
+  Wrench,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
@@ -20,6 +21,7 @@ export function AppShell() {
     { to: "/", label: t("nav.dashboard"), icon: LayoutDashboard, end: true as const },
     { to: "/design", label: t("nav.design"), icon: Sparkles, end: false as const },
     { to: "/recipes", label: t("nav.recipes"), icon: Beaker, end: false as const },
+    { to: "/tools", label: t("nav.tools"), icon: Wrench, end: false as const },
     { to: "/history", label: t("nav.history"), icon: HistoryIcon, end: false as const },
     { to: "/settings", label: t("nav.settings"), icon: Settings, end: false as const },
   ];
@@ -109,7 +111,7 @@ export function AppShell() {
           aria-label="Main"
           style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
         >
-          <div className="mx-auto grid max-w-lg grid-cols-5">
+          <div className="mx-auto grid max-w-lg grid-cols-6">
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}

@@ -8,6 +8,7 @@ import History from "./pages/History";
 import Pair from "./pages/Pair";
 import Recipes from "./pages/Recipes";
 import Settings from "./pages/Settings";
+import Tools from "./pages/Tools";
 
 export default function App() {
   const { status, error, mode, refresh } = useAuth();
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/design" element={<Design />} />
         <Route path="/recipes" element={<Recipes />} />
+        <Route path="/tools" element={<Tools />} />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/catalog" element={<Navigate to="/recipes" replace />} />

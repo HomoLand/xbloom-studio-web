@@ -9,7 +9,7 @@ import { defaultCoffeeRecipe, isCoffeeContent, recipeDisplayName } from "./recip
 
 const USER_KEY = "xbloom.userRecipes.v1";
 
-export type LocalRecipeSource = "official" | "user" | "design";
+export type LocalRecipeSource = "official" | "user" | "design" | "cloud";
 
 export type LocalRecipeEntry = {
   recipe_id: string;
@@ -19,6 +19,10 @@ export type LocalRecipeEntry = {
   content: RecipeContent;
   updated_at: string;
   created_at: string;
+  /** Remote xBloom account tableId when source=cloud or after push. */
+  table_id?: number | null;
+  region?: string;
+  origin?: string;
 };
 
 function nowIso(): string {
@@ -123,10 +127,16 @@ function newUserId(): string {
   return `user:${id}`;
 }
 
-/** Create or update a user recipe in localStorage. */
+/** Create or update a user/cloud recipe in localStorage. */
 export function saveUserRecipe(
   content: RecipeContent,
-  opts?: { recipeId?: string; source?: LocalRecipeSource },
+  opts?: {
+    recipeId?: string;
+    source?: LocalRecipeSource;
+    tableId?: number | null;
+    region?: string;
+    origin?: string;
+  },
 ): LocalRecipeEntry {
   const name = recipeDisplayName(content);
   const kind =
@@ -137,14 +147,19 @@ export function saveUserRecipe(
   const users = readUserRaw();
   const recipeId = opts?.recipeId ?? newUserId();
   const existingIdx = users.findIndex((u) => u.recipe_id === recipeId);
+  const prev = existingIdx >= 0 ? users[existingIdx]! : null;
   const entry: LocalRecipeEntry = {
     recipe_id: recipeId,
     name,
     kind,
-    source: opts?.source ?? "user",
+    source: opts?.source ?? prev?.source ?? "user",
     content: JSON.parse(JSON.stringify(content)) as RecipeContent,
-    created_at: existingIdx >= 0 ? users[existingIdx]!.created_at : t,
+    created_at: prev?.created_at ?? t,
     updated_at: t,
+    table_id:
+      opts?.tableId !== undefined ? opts.tableId : (prev?.table_id ?? null),
+    region: opts?.region ?? prev?.region,
+    origin: opts?.origin ?? prev?.origin,
   };
   if (existingIdx >= 0) users[existingIdx] = entry;
   else users.unshift(entry);

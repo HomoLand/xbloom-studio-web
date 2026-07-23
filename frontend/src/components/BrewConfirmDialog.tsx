@@ -111,10 +111,24 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
       if (!workflowId) {
         setBusy("load");
-        await bleSession.loadCoffee(content);
         workflowId = newRequestId("webble");
+        await bleSession.loadCoffee(content, {
+          journal: {
+            recipe_name: target.recipeName ?? recipeDisplayName(content),
+            recipe_revision_id: target.recipeRevisionId,
+            workflow_id: workflowId,
+            kind: content.kind,
+          },
+        });
         setLoadedWorkflowId(workflowId);
         persistWorkflow(workflowId, "coffee", target.recipeRevisionId);
+      } else {
+        bleSession.beginBrewJournal({
+          recipe_name: target.recipeName ?? recipeDisplayName(content),
+          recipe_revision_id: target.recipeRevisionId,
+          workflow_id: workflowId,
+          kind: isCoffeeContent(content) ? content.kind : "coffee",
+        });
       }
 
       setBusy("start");
