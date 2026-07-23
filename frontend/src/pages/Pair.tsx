@@ -80,7 +80,7 @@ export default function Pair() {
     <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center px-1">
       <div className="mb-6 text-center">
         <img
-          src="/studio-machine.png"
+          src={`${import.meta.env.BASE_URL}studio-machine.png`}
           alt=""
           className="mx-auto mb-4 h-24 w-auto opacity-85"
           draggable={false}

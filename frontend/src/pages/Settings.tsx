@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { LogOut, RefreshCw, Trash2 } from "lucide-react";
+import { Bluetooth, LogOut, RefreshCw, Trash2 } from "lucide-react";
 import { api, type PairingNewResult, type SessionInfo } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -20,9 +20,21 @@ import {
   isEpochExpired,
   shortId,
 } from "../lib/recipeDomain";
+import { useMachine } from "../machine/MachineContext";
+import type { MachineDriver } from "../machine/driver";
 
 export default function Settings() {
   const { config, session, mode, logout, refresh } = useAuth();
+  const {
+    driver,
+    setDriver,
+    webBluetooth,
+    bleSnapshot,
+    connectBle,
+    disconnectBle,
+  } = useMachine();
+  const [bleBusy, setBleBusy] = useState(false);
+  const [bleActionError, setBleActionError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -101,7 +113,7 @@ export default function Settings() {
     <div>
       <PageHeader
         title="Settings"
-        description="Sessions, pairing, and connection mode."
+        description="Machine driver, sessions, pairing, and host mode."
         actions={
           <Button variant="secondary" size="sm" onClick={() => void doLogout()}>
             <LogOut className="h-3.5 w-3.5" aria-hidden />
@@ -111,7 +123,141 @@ export default function Settings() {
       />
 
       <div className="space-y-4">
-        <Panel title="Connection">
+        <Panel title="Machine driver">
+          <p className="mb-3 text-sm text-ink-muted">
+            Progressive path (ADR-WEB-BLUETOOTH): local Python bridge (legacy) or
+            Chrome Web Bluetooth near-field control. When Web Bluetooth is
+            available, it is the default for new browsers; bridge remains
+            selectable. Coffee load/start/cancel use Web Bluetooth when that
+            driver is active (tea still uses bridge).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                {
+                  id: "bridge" as MachineDriver,
+                  label: "Bridge (local daemon)",
+                },
+                {
+                  id: "web-bluetooth" as MachineDriver,
+                  label: "Web Bluetooth (Chrome)",
+                },
+              ] as const
+            ).map((opt) => {
+              const active = driver === opt.id;
+              return (
+                <Button
+                  key={opt.id}
+                  size="sm"
+                  variant={active ? "primary" : "secondary"}
+                  onClick={() => setDriver(opt.id)}
+                >
+                  {opt.label}
+                </Button>
+              );
+            })}
+          </div>
+          <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+            <Row label="Active driver" value={driver} />
+            <Row
+              label="Web Bluetooth"
+              value={
+                webBluetooth.usable
+                  ? "Available"
+                  : webBluetooth.reason ?? "Unavailable"
+              }
+            />
+            <Row label="BLE session" value={bleSnapshot.phase} />
+            <Row
+              label="Device"
+              value={
+                bleSnapshot.deviceName ||
+                bleSnapshot.deviceId ||
+                (driver === "web-bluetooth" ? "Not connected" : "—")
+              }
+            />
+            <Row label="Notify frames" value={String(bleSnapshot.notifyCount)} />
+            <Row
+              label="Machine phase"
+              value={bleSnapshot.machineStateName ?? "—"}
+            />
+            <Row
+              label="Cup weight"
+              value={
+                bleSnapshot.cupWeightG != null
+                  ? `${bleSnapshot.cupWeightG} g`
+                  : "—"
+              }
+            />
+            <Row
+              label="Dispensed water"
+              value={
+                bleSnapshot.dispensedWaterMl != null
+                  ? `${bleSnapshot.dispensedWaterMl} ml`
+                  : "—"
+              }
+            />
+          </dl>
+          {driver === "web-bluetooth" ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={bleBusy || bleSnapshot.phase === "connecting"}
+                onClick={() => {
+                  setBleBusy(true);
+                  setBleActionError(null);
+                  void connectBle()
+                    .catch((e) =>
+                      setBleActionError(
+                        e instanceof Error ? e.message : String(e),
+                      ),
+                    )
+                    .finally(() => setBleBusy(false));
+                }}
+              >
+                <Bluetooth className="h-3.5 w-3.5" aria-hidden />
+                {bleSnapshot.phase === "connected"
+                  ? "Reconnect"
+                  : "Connect Studio"}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={
+                  bleBusy ||
+                  bleSnapshot.phase === "idle" ||
+                  bleSnapshot.phase === "disconnected"
+                }
+                onClick={() => {
+                  setBleBusy(true);
+                  setBleActionError(null);
+                  void disconnectBle()
+                    .catch((e) =>
+                      setBleActionError(
+                        e instanceof Error ? e.message : String(e),
+                      ),
+                    )
+                    .finally(() => setBleBusy(false));
+                }}
+              >
+                Disconnect
+              </Button>
+            </div>
+          ) : null}
+          {bleSnapshot.lastError || bleActionError ? (
+            <Alert tone="red" className="mt-3">
+              {bleActionError ?? bleSnapshot.lastError}
+            </Alert>
+          ) : null}
+          {driver === "web-bluetooth" && !webBluetooth.usable ? (
+            <Alert tone="amber" className="mt-3">
+              {webBluetooth.reason}
+            </Alert>
+          ) : null}
+        </Panel>
+
+        <Panel title="Host connection">
           <dl className="grid gap-2 text-sm sm:grid-cols-2">
             <Row label="Mode" value={mode ?? "-"} />
             <Row

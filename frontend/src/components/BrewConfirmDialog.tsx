@@ -11,12 +11,14 @@ import {
   type TeaRecipeContent,
 } from "../api";
 import {
+  isCoffeeContent,
   isTeaContent,
   recipeDisplayName,
   shortId,
   storageKindOf,
 } from "../lib/recipeDomain";
 import { persistWorkflow } from "../lib/workflowStore";
+import { useMachine } from "../machine/MachineContext";
 import { Alert, Button, Dialog, Field, TextInput } from "./ui";
 
 export type BrewTarget = {
@@ -39,8 +41,9 @@ type Props = {
  */
 export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   const navigate = useNavigate();
+  const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
   const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState<"load" | "start" | null>(null);
+  const [busy, setBusy] = useState<"load" | "start" | "cancel" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<string | null>(null);
   /** Uncertain machine outcome: no further mutation; go to Dashboard. */
@@ -58,6 +61,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   const name =
     target?.recipeName ||
     (content ? recipeDisplayName(content) : "Recipe");
+  const webBle = driver === "web-bluetooth";
 
   const reset = () => {
     setConfirm("");
@@ -76,8 +80,63 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
     onClose();
   };
 
+  const brewWebBluetooth = async () => {
+    if (!target || !content) return;
+    if (kind === "tea" || !isCoffeeContent(content)) {
+      setError("Web Bluetooth path supports coffee recipes only in this release.");
+      return;
+    }
+    if (confirm.trim() !== phrase) {
+      setError(`Confirmation phrase must match exactly: ${phrase}`);
+      return;
+    }
+
+    setError(null);
+    setRecovery(null);
+    setUncertain(false);
+    setBlockMutation(false);
+
+    let workflowId = loadedWorkflowId;
+    try {
+      if (
+        bleSnapshot.phase === "idle" ||
+        bleSnapshot.phase === "disconnected" ||
+        bleSnapshot.phase === "error"
+      ) {
+        setBusy("load");
+        await connectBle();
+      }
+
+      if (!workflowId) {
+        setBusy("load");
+        await bleSession.loadCoffee(content);
+        workflowId = newRequestId("webble");
+        setLoadedWorkflowId(workflowId);
+        persistWorkflow(workflowId, "coffee", target.recipeRevisionId);
+      }
+
+      setBusy("start");
+      await bleSession.startBrew();
+      persistWorkflow(workflowId, "coffee", target.recipeRevisionId);
+      const startedId = workflowId;
+      reset();
+      onStarted(startedId, "coffee");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setRecovery(
+        "Check machine is powered, in range, and the official App is closed. Retry only if status is idle.",
+      );
+      setBusy(null);
+    }
+  };
+
   const brew = async () => {
     if (!target) return;
+    if (webBle) {
+      await brewWebBluetooth();
+      return;
+    }
+
     setError(null);
     setRecovery(null);
     setUncertain(false);
@@ -171,6 +230,19 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
     }
   };
 
+  const cancelWebBle = async () => {
+    setBusy("cancel");
+    setError(null);
+    try {
+      await bleSession.cancelBrew();
+      reset();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
   if (!target || !content) {
     return (
       <Dialog open={open} title="Brew" onClose={handleClose} busy={!!busy}>
@@ -189,8 +261,22 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
     >
       <div className="space-y-4">
         <p className="text-sm text-ink-muted">
-          Load this revision onto the machine, then start with the safety phrase.
+          {webBle
+            ? "Web Bluetooth: load frames go directly to the Studio (Chrome). Type the safety phrase, then load and start. Close the official App first."
+            : "Load this revision onto the machine, then start with the safety phrase."}
         </p>
+
+        {webBle ? (
+          <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
+            Driver web-bluetooth | session {bleSnapshot.phase}
+            {bleSnapshot.machineStateName
+              ? ` | machine ${bleSnapshot.machineStateName}`
+              : ""}
+            {bleSnapshot.cupWeightG != null
+              ? ` | cup ${bleSnapshot.cupWeightG} g`
+              : ""}
+          </div>
+        ) : null}
 
         <div className="text-sm">
           <div className="font-medium text-ink">{name}</div>
@@ -238,6 +324,19 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
           <Button variant="secondary" onClick={handleClose} disabled={!!busy}>
             Close
           </Button>
+          {webBle &&
+          (bleSnapshot.loaded ||
+            bleSnapshot.phase === "armed" ||
+            bleSnapshot.phase === "brewing" ||
+            bleSnapshot.phase === "starting") ? (
+            <Button
+              variant="secondary"
+              onClick={() => void cancelWebBle()}
+              disabled={!!busy}
+            >
+              {busy === "cancel" ? "Cancelling..." : "Cancel brew"}
+            </Button>
+          ) : null}
           {!blockMutation ? (
             <Button
               variant="success"

@@ -362,7 +362,7 @@ export default function Design() {
           {!imagePreview ? (
             <div className="mb-4 flex justify-center rounded-lg border border-dashed border-line bg-paper py-6">
               <img
-                src="/studio-machine.png"
+                src={`${import.meta.env.BASE_URL}studio-machine.png`}
                 alt=""
                 className="h-24 w-auto opacity-80 sm:h-28"
                 draggable={false}

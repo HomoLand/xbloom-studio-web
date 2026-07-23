@@ -7,6 +7,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
+import { useMachine } from "../machine/MachineContext";
 import { cx, StatusPill } from "./ui";
 
 const NAV_ITEMS = [
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
 
 export function AppShell() {
   const { mode, session, config } = useAuth();
+  const { driver, bleSnapshot } = useMachine();
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
@@ -31,7 +33,26 @@ export function AppShell() {
                 {mode}
               </StatusPill>
             ) : null}
+            <StatusPill
+              tone={driver === "web-bluetooth" ? "green" : "neutral"}
+            >
+              {driver === "web-bluetooth" ? "web-ble" : "bridge"}
+            </StatusPill>
           </div>
+          {driver === "web-bluetooth" ? (
+            <div className="mt-1 text-[11px] leading-snug text-ink-muted">
+              {bleSnapshot.phase}
+              {bleSnapshot.machineStateName
+                ? ` · ${bleSnapshot.machineStateName}`
+                : ""}
+              {bleSnapshot.cupWeightG != null
+                ? ` · cup ${bleSnapshot.cupWeightG}g`
+                : ""}
+              {bleSnapshot.dispensedWaterMl != null
+                ? ` · H2O ${bleSnapshot.dispensedWaterMl}ml`
+                : ""}
+            </div>
+          ) : null}
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Main">
           {NAV_ITEMS.map((item) => (
