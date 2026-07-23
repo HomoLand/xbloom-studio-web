@@ -145,15 +145,25 @@ def _isolated_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """FastAPI TestClient with bridge ensure mocked (no real daemon)."""
+def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """FastAPI TestClient with bridge ensure mocked (no real daemon).
+
+    Builds a fresh app via create_app so host LAN/design env cannot leak through
+    the import-time main.app snapshot.
+    """
+
+    state = tmp_path / "client-state"
+    state.mkdir(exist_ok=True)
+    monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
+    monkeypatch.setenv("XBLOOM_WEB_MODE", "loopback")
 
     with patch(
         "main.ensure_bridge_daemon",
         return_value={"status": "ok", "client_ready": True},
     ):
-        from main import app
+        from main import create_app
 
+        app = create_app()
         with TestClient(app) as tc:
             yield tc
 
@@ -364,7 +374,8 @@ def test_stale_concurrent_edits_one_success_one_409(
                 "main.ensure_bridge_daemon",
                 return_value={"status": "ok", "client_ready": True},
             ):
-                from main import app
+                from main import create_app
+                app = create_app()
 
                 with TestClient(app) as tc:
                     barrier.wait(timeout=10)

@@ -551,19 +551,21 @@ def test_coffee_start_preserves_request_and_workflow_id(monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     import main as main_mod
+    from unittest.mock import patch
 
-    async def _noop():
-        return None
-
-    monkeypatch.setattr(main_mod, "_ensure_bridge_daemon", _noop)
-    return TestClient(main_mod.app)
+    monkeypatch.setenv("XBLOOM_WEB_MODE", "loopback")
+    with patch(
+        "main.ensure_bridge_daemon",
+        return_value={"status": "ok", "client_ready": True},
+    ):
+        app = main_mod.create_app()
+        with TestClient(app) as tc:
+            yield tc
 
 
 def test_http_no_registered_device_call_route(client):
     """No POST /api/device/call route; request may be 404 or 405."""
-    import main as main_mod
-
-    routes = _route_paths(main_mod.app)
+    routes = _route_paths(client.app)
     assert ("POST", "/api/device/call") not in routes
     res = client.post("/api/device/call", json={"method": "status"})
     assert res.status_code in (404, 405)

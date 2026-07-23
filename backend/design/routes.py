@@ -108,12 +108,13 @@ def initialize_design_at_startup() -> DesignService | None:
     """
 
     global _service
+    # Test doubles may inject a service (complete or intentionally incomplete)
+    # before lifespan. Do not re-validate injection here: production never
+    # pre-sets _service, and request paths still call initialize() as needed.
+    if _service is not None:
+        return _service
     if not design_env_configured():
         return None
-    if _service is not None:
-        # Tests may inject a service before lifespan; still validate it.
-        _service.initialize()
-        return _service
     service = initialize_design_service_from_env()
     _service = service
     return service

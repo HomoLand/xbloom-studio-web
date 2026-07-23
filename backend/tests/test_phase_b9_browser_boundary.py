@@ -30,12 +30,16 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     import main as main_mod
+    from unittest.mock import patch
 
-    async def _noop():
-        return None
-
-    monkeypatch.setattr(main_mod, "_ensure_bridge_daemon", _noop)
-    return TestClient(main_mod.app)
+    monkeypatch.setenv("XBLOOM_WEB_MODE", "loopback")
+    with patch(
+        "main.ensure_bridge_daemon",
+        return_value={"status": "ok", "client_ready": True},
+    ):
+        app = main_mod.create_app()
+        with TestClient(app) as tc:
+            yield tc
 
 
 def _assert_no_local_path_leak(text: str, *needles: str) -> None:
@@ -651,16 +655,8 @@ def test_catalog_and_history_responses_omit_local_paths(
 
 
 def test_no_generic_bridge_call_route(client: TestClient) -> None:
-    import main as main_mod
-
-    routes = {
-        (list(r.methods)[0] if r.methods else "GET", r.path)
-        for r in main_mod.app.routes
-        if hasattr(r, "methods") and hasattr(r, "path")
-    }
-    # Flatten multi-method routes.
     found_call = False
-    for r in main_mod.app.routes:
+    for r in client.app.routes:
         if getattr(r, "path", None) == "/api/device/call":
             found_call = True
     assert not found_call

@@ -41,9 +41,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         "main.ensure_bridge_daemon",
         return_value={"status": "ok", "client_ready": True},
     ):
-        from main import app
+        from main import create_app
 
         set_design_service(None)
+        app = create_app()
         with TestClient(app) as tc:
             yield tc
         set_design_service(None)

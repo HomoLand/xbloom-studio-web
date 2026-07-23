@@ -261,11 +261,13 @@ def client(design_service: DesignService, monkeypatch: pytest.MonkeyPatch, tmp_p
     state = tmp_path / "state"
     state.mkdir()
     monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
+    monkeypatch.setenv("XBLOOM_WEB_MODE", "loopback")
     # Prevent real bridge ensure during app lifespan.
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(design_service)
-        from main import app
+        from main import create_app
 
+        app = create_app()
         with TestClient(app) as tc:
             yield tc
         set_design_service(None)
@@ -370,8 +372,9 @@ def test_knowledge_missing_via_http(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     service = DesignService(cfg, provider=mock_provider)
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
 
+        app = create_app()
         with TestClient(app) as client:
             resp = client.post("/api/design", json={"text": "hi"})
             assert resp.status_code == 503
@@ -557,7 +560,8 @@ def test_text_mode_ocr_missing_capability(
     monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             png = _make_png_bytes()
@@ -789,7 +793,8 @@ def test_provider_timeout_surfaces_504(
     monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             resp = client.post("/api/design", json={"text": "hi"})
@@ -1140,7 +1145,7 @@ def test_fastapi_json_oversize_content_length_413(
 
     from design.body_limit import DesignRequestBodyLimitMiddleware
     from design.config import max_design_request_body_bytes
-    from main import app
+    from main import create_app
 
     state = tmp_path / "st"
     state.mkdir()
@@ -1149,10 +1154,10 @@ def test_fastapi_json_oversize_content_length_413(
 
     # Replace middleware max with the test service budget for a tight check.
     # Starlette stacks middleware; rebuild a thin ASGI wrapper with fixed max.
-    limited = DesignRequestBodyLimitMiddleware(app, max_body_bytes=max_body)
-
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(design_service)
+        app = create_app()
+        limited = DesignRequestBodyLimitMiddleware(app, max_body_bytes=max_body)
         with TestClient(limited) as client:
             # httpx sets Content-Length from body; craft raw ASGI-level via headers on large body.
             huge = b'{"text":"' + (b"a" * (max_body + 100)) + b'"}'
@@ -1234,8 +1239,9 @@ def test_multipart_form_closed_on_rejected_request(
 
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(design_service)
-        from main import app
+        from main import create_app
 
+        app = create_app()
         with patch.object(FormData, "close", tracking_close):
             with TestClient(app) as client:
                 resp = client.post(
@@ -1277,7 +1283,8 @@ def test_multipart_defensive_read_too_large(
     assert len(png) > 64
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             resp = client.post(
@@ -1323,7 +1330,8 @@ def test_blocking_ocr_does_not_block_past_request_timeout(
     png = _make_png_bytes()
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             t0 = time.perf_counter()
@@ -1724,7 +1732,8 @@ def test_design_service_aclose_on_shutdown(
     monkeypatch.setenv("XBLOOM_STATE_DIR", str(state))
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             resp = client.post("/api/design", json={"text": "hi"})
@@ -1762,7 +1771,8 @@ def test_bridge_daemon_not_stopped_on_shutdown(monkeypatch: pytest.MonkeyPatch, 
 
     with patch("main.ensure_bridge_daemon", side_effect=fake_ensure):
         set_design_service(None)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             assert client.get("/api/health").status_code == 200
@@ -1799,8 +1809,9 @@ def test_ocr_typeerror_not_retried(
     png = _make_png_bytes()
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
 
+        app = create_app()
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.post(
                 "/api/design",
@@ -1858,7 +1869,8 @@ def test_knowledge_error_body_does_not_leak_absolute_path(
     service = DesignService(cfg, provider=mock_provider)
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
         set_design_service(service)
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             resp = client.post("/api/design", json={"text": "hi"})
@@ -1945,7 +1957,8 @@ def test_startup_no_design_env_is_lazy(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     set_design_service(None)
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
-        from main import app
+        from main import create_app
+        app = create_app()
 
         with TestClient(app) as client:
             assert client.get("/api/health").status_code == 200
@@ -1967,8 +1980,10 @@ def test_startup_unsupported_provider_fails_before_yield(
 
     set_design_service(None)
     with patch("main.ensure_bridge_daemon", return_value={"status": "ok", "client_ready": True}):
-        from main import app
+        from main import create_app
 
+        # Build app after env is set so lifespan eager-init sees unsupported provider.
+        app = create_app()
         with pytest.raises(Exception) as ei:
             # Lifespan must raise before yield — TestClient enter runs startup.
             with TestClient(app):
@@ -2035,7 +2050,8 @@ def test_startup_configured_initializes_once_and_closes(
             side_effect=factory,
         ):
             from design.routes import get_design_service_if_initialized
-            from main import app
+            from main import create_app
+            app = create_app()
 
             with TestClient(app) as client:
                 assert client.get("/api/health").status_code == 200
