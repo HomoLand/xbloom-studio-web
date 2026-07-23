@@ -14,6 +14,7 @@ import { CoffeeEditor } from "../components/RecipeEditors";
 import {
   Alert,
   Button,
+  Dialog,
   Field,
   IconButton,
   PageHeader,
@@ -70,7 +71,8 @@ export default function Design() {
   const { t, locale } = useI18n();
   const { driver } = useMachine();
   const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const streamEndRef = useRef<HTMLDivElement>(null);
 
   const [text, setText] = useState("");
@@ -85,8 +87,105 @@ export default function Design() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [validateMsg, setValidateMsg] = useState<string | null>(null);
+  /** null = probing, true = can open camera, false = no device / no API */
+  const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   const aiOk = isAiConfigured(readAiConfig());
+
+  // Probe whether any video input exists (no permission prompt when possible).
+  useEffect(() => {
+    let cancelled = false;
+    async function probe() {
+      if (
+        typeof navigator === "undefined" ||
+        !navigator.mediaDevices?.getUserMedia
+      ) {
+        if (!cancelled) setCameraAvailable(false);
+        return;
+      }
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasVideo = devices.some((d) => d.kind === "videoinput");
+        // Before permission, some browsers hide devices; keep button enabled
+        // if API exists and we did not get an explicit empty video list after perm.
+        if (!cancelled) {
+          if (devices.length === 0) setCameraAvailable(true);
+          else setCameraAvailable(hasVideo);
+        }
+      } catch {
+        if (!cancelled) setCameraAvailable(true);
+      }
+    }
+    void probe();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const stopCameraStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((tr) => tr.stop());
+    mediaStreamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const closeCamera = useCallback(() => {
+    stopCameraStream();
+    setCameraOpen(false);
+    setCameraBusy(false);
+    setCameraError(null);
+  }, [stopCameraStream]);
+
+  useEffect(() => {
+    return () => {
+      stopCameraStream();
+    };
+  }, [stopCameraStream]);
+
+  const openCamera = useCallback(async () => {
+    if (cameraAvailable === false) return;
+    setCameraError(null);
+    setCameraBusy(true);
+    setCameraOpen(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
+      mediaStreamRef.current = stream;
+      // Mark available after successful open.
+      setCameraAvailable(true);
+      // Attach after dialog paints.
+      requestAnimationFrame(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.srcObject = stream;
+        void video.play().catch(() => {
+          /* autoplay policies rare for user-gesture open */
+        });
+      });
+    } catch (e) {
+      const name = e instanceof DOMException ? e.name : "";
+      if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        setCameraAvailable(false);
+        setCameraError(t("design.cameraNoDevice"));
+      } else {
+        setCameraError(t("design.cameraDenied"));
+      }
+      stopCameraStream();
+      setCameraOpen(false);
+    } finally {
+      setCameraBusy(false);
+    }
+  }, [cameraAvailable, stopCameraStream, t]);
 
   const imagesRef = useRef(images);
   imagesRef.current = images;
@@ -129,6 +228,31 @@ export default function Design() {
       ];
     });
   }, []);
+
+  const capturePhoto = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File(
+          [blob],
+          `camera-${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`,
+          { type: "image/jpeg" },
+        );
+        addOneFile(file);
+        closeCamera();
+      },
+      "image/jpeg",
+      0.92,
+    );
+  }, [addOneFile, closeCamera]);
 
   const removeImage = useCallback((id: string) => {
     setImages((prev) => {
@@ -261,7 +385,17 @@ export default function Design() {
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => cameraRef.current?.click()}
+                  disabled={
+                    cameraAvailable === false ||
+                    images.length >= MAX_IMAGES ||
+                    cameraBusy
+                  }
+                  title={
+                    cameraAvailable === false
+                      ? t("design.cameraNoDevice")
+                      : undefined
+                  }
+                  onClick={() => void openCamera()}
                 >
                   <Camera className="h-3.5 w-3.5" aria-hidden />
                   {t("design.camera")}
@@ -273,22 +407,16 @@ export default function Design() {
                   </Button>
                 ) : null}
               </div>
+              {cameraError ? (
+                <Alert tone="amber" className="mt-2">
+                  {cameraError}
+                </Alert>
+              ) : null}
               <input
                 ref={fileRef}
                 type="file"
                 accept={ACCEPT_IMAGES}
                 multiple
-                className="hidden"
-                onChange={(e) => {
-                  addFiles(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <input
-                ref={cameraRef}
-                type="file"
-                accept={ACCEPT_IMAGES}
-                capture="environment"
                 className="hidden"
                 onChange={(e) => {
                   addFiles(e.target.files);
@@ -434,6 +562,40 @@ export default function Design() {
         onClose={() => setBrewTarget(null)}
         onStarted={() => setBrewTarget(null)}
       />
+
+      <Dialog
+        open={cameraOpen}
+        title={t("design.camera")}
+        onClose={closeCamera}
+        busy={cameraBusy}
+        size="lg"
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-ink-muted">{t("design.cameraHint")}</p>
+          <div className="overflow-hidden rounded-md border border-line bg-ink">
+            <video
+              ref={videoRef}
+              className="mx-auto max-h-[60vh] w-full object-contain"
+              playsInline
+              muted
+              autoPlay
+            />
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" onClick={closeCamera}>
+              {t("design.cameraClose")}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={cameraBusy}
+              onClick={capturePhoto}
+            >
+              <Camera className="h-3.5 w-3.5" aria-hidden />
+              {t("design.cameraCapture")}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }
