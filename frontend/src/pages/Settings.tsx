@@ -14,6 +14,15 @@ import {
   StatusPill,
   TextInput,
 } from "../components/ui";
+import { useI18n } from "../i18n/I18nContext";
+import type { Locale } from "../i18n/messages";
+import {
+  clearAiConfig,
+  isAiConfigured,
+  readAiConfig,
+  writeAiConfig,
+  type AiConfig,
+} from "../lib/aiConfig";
 import {
   formatEpochSeconds,
   formatRemainingFromEpoch,
@@ -24,17 +33,21 @@ import { useMachine } from "../machine/MachineContext";
 import type { MachineDriver } from "../machine/driver";
 
 export default function Settings() {
+  const { t, locale, setLocale, locales, localeLabels } = useI18n();
   const { config, session, mode, logout, refresh } = useAuth();
   const {
     driver,
     setDriver,
     webBluetooth,
     bleSnapshot,
+    bleSession,
     connectBle,
     disconnectBle,
   } = useMachine();
   const [bleBusy, setBleBusy] = useState(false);
   const [bleActionError, setBleActionError] = useState<string | null>(null);
+  const [aiForm, setAiForm] = useState<AiConfig>(() => readAiConfig());
+  const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -45,6 +58,11 @@ export default function Settings() {
   const [now, setNow] = useState(() => Date.now());
 
   const loadSessions = useCallback(async () => {
+    if (mode === "static") {
+      setLoadingSessions(false);
+      setSessions([]);
+      return;
+    }
     setSessionsError(null);
     setLoadingSessions(true);
     try {
@@ -56,7 +74,7 @@ export default function Settings() {
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     void loadSessions();
@@ -112,18 +130,103 @@ export default function Settings() {
   return (
     <div>
       <PageHeader
-        title="Settings"
-        description="Machine driver, sessions, pairing, and host mode."
+        title={t("settings.title")}
+        description={t("settings.desc")}
         actions={
-          <Button variant="secondary" size="sm" onClick={() => void doLogout()}>
-            <LogOut className="h-3.5 w-3.5" aria-hidden />
-            Log out
-          </Button>
+          mode !== "static" ? (
+            <Button variant="secondary" size="sm" onClick={() => void doLogout()}>
+              <LogOut className="h-3.5 w-3.5" aria-hidden />
+              Log out
+            </Button>
+          ) : null
         }
       />
 
       <div className="space-y-4">
-        <Panel title="Machine driver">
+        <Panel title={t("settings.language")}>
+          <div className="flex flex-wrap gap-2">
+            {locales.map((code) => (
+              <Button
+                key={code}
+                size="sm"
+                variant={locale === code ? "primary" : "secondary"}
+                onClick={() => setLocale(code as Locale)}
+              >
+                {localeLabels[code]}
+              </Button>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title={t("settings.ai")}>
+          <p className="mb-3 text-sm text-ink-muted">{t("settings.aiHint")}</p>
+          <div className="space-y-3">
+            <Field label={t("settings.baseUrl")} htmlFor="ai-base">
+              <TextInput
+                id="ai-base"
+                value={aiForm.baseUrl}
+                placeholder="https://api.openai.com/v1"
+                onChange={(e) =>
+                  setAiForm((s) => ({ ...s, baseUrl: e.target.value }))
+                }
+                autoComplete="off"
+              />
+            </Field>
+            <Field label={t("settings.apiKey")} htmlFor="ai-key">
+              <TextInput
+                id="ai-key"
+                type="password"
+                value={aiForm.apiKey}
+                placeholder="sk-..."
+                onChange={(e) =>
+                  setAiForm((s) => ({ ...s, apiKey: e.target.value }))
+                }
+                autoComplete="off"
+              />
+            </Field>
+            <Field label={t("settings.model")} htmlFor="ai-model">
+              <TextInput
+                id="ai-model"
+                value={aiForm.model}
+                placeholder="gpt-4o-mini"
+                onChange={(e) =>
+                  setAiForm((s) => ({ ...s, model: e.target.value }))
+                }
+                autoComplete="off"
+              />
+            </Field>
+            {aiMsg ? <Alert tone="green">{aiMsg}</Alert> : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  writeAiConfig(aiForm);
+                  setAiForm(readAiConfig());
+                  setAiMsg(t("settings.aiSaved"));
+                }}
+              >
+                {t("settings.saveAi")}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  clearAiConfig();
+                  setAiForm(readAiConfig());
+                  setAiMsg(null);
+                }}
+              >
+                {t("settings.clearAi")}
+              </Button>
+              <StatusPill tone={isAiConfigured(aiForm) ? "green" : "neutral"}>
+                {isAiConfigured(aiForm) ? "configured" : "not set"}
+              </StatusPill>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title={t("settings.driver")}>
           <p className="mb-3 text-sm text-ink-muted">
             Progressive path (ADR-WEB-BLUETOOTH): local Python bridge (legacy) or
             Chrome Web Bluetooth near-field control. When Web Bluetooth is
@@ -176,7 +279,6 @@ export default function Settings() {
                 (driver === "web-bluetooth" ? "Not connected" : "—")
               }
             />
-            <Row label="Notify frames" value={String(bleSnapshot.notifyCount)} />
             <Row
               label="Machine phase"
               value={bleSnapshot.machineStateName ?? "—"}
@@ -242,6 +344,25 @@ export default function Settings() {
                 }}
               >
                 Disconnect
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={bleBusy}
+                onClick={() => {
+                  setBleBusy(true);
+                  setBleActionError(null);
+                  void bleSession
+                    .forgetDevice()
+                    .catch((e) =>
+                      setBleActionError(
+                        e instanceof Error ? e.message : String(e),
+                      ),
+                    )
+                    .finally(() => setBleBusy(false));
+                }}
+              >
+                {t("settings.forgetDevice")}
               </Button>
             </div>
           ) : null}

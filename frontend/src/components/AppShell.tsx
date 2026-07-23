@@ -7,26 +7,28 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAuth } from "../auth/AuthContext";
+import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
 import { cx, StatusPill } from "./ui";
-
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true as const },
-  { to: "/design", label: "Design", icon: Sparkles, end: false as const },
-  { to: "/recipes", label: "Recipes", icon: Beaker, end: false as const },
-  { to: "/history", label: "History", icon: HistoryIcon, end: false as const },
-  { to: "/settings", label: "Settings", icon: Settings, end: false as const },
-];
 
 export function AppShell() {
   const { mode, session, config } = useAuth();
   const { driver, bleSnapshot } = useMachine();
+  const { t } = useI18n();
+
+  const NAV_ITEMS = [
+    { to: "/", label: t("nav.dashboard"), icon: LayoutDashboard, end: true as const },
+    { to: "/design", label: t("nav.design"), icon: Sparkles, end: false as const },
+    { to: "/recipes", label: t("nav.recipes"), icon: Beaker, end: false as const },
+    { to: "/history", label: t("nav.history"), icon: HistoryIcon, end: false as const },
+    { to: "/settings", label: t("nav.settings"), icon: Settings, end: false as const },
+  ];
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
       <aside className="hidden w-52 shrink-0 flex-col border-r border-line bg-surface md:flex">
         <div className="border-b border-line px-4 py-3">
-          <div className="text-sm font-semibold text-ink">xBloom Studio</div>
+          <div className="text-sm font-semibold text-ink">{t("app.name")}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-faint">
             {mode ? (
               <StatusPill tone={mode === "lan" ? "blue" : "neutral"}>
@@ -88,7 +90,7 @@ export function AppShell() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex items-center justify-between border-b border-line bg-surface px-4 py-2.5 md:hidden">
           <div>
-            <div className="text-sm font-semibold text-ink">xBloom Studio</div>
+            <div className="text-sm font-semibold text-ink">{t("app.name")}</div>
             <div className="text-[11px] text-ink-faint">
               {mode ?? "-"}
               {session?.client_label ? ` | ${session.client_label}` : ""}

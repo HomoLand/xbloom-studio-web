@@ -40,8 +40,9 @@ import {
   StatusPill,
 } from "../components/ui";
 import { classifyOperationalError } from "../lib/apiErrors";
+import { useI18n } from "../i18n/I18nContext";
 import { isStaticDeploy } from "../lib/deploy";
-import { defaultCoffeeRecipe } from "../lib/recipeDomain";
+import { sampleCoffeeIfEmpty } from "../lib/localRecipes";
 import { useMachine } from "../machine/MachineContext";
 import {
   applyExplicitEventRearm,
@@ -92,6 +93,7 @@ type EventsPollOpts = {
 };
 
 export default function Dashboard() {
+  const { t } = useI18n();
   const { driver, bleSnapshot, bleSession, connectBle, disconnectBle } =
     useMachine();
   const webBle = driver === "web-bluetooth";
@@ -683,19 +685,21 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader
-        title="Dashboard"
-        description="Monitor bridge, workflow, telemetry, and durable events."
+        title={t("dashboard.title")}
+        description={t("dashboard.desc")}
         actions={
-          <IconButton
-            label="Refresh status"
-            onClick={() => {
-              void pollStatus({ clearStickyBusy: true });
-              void pollEvents({ rearmGap: true });
-            }}
-            disabled={actionBusy !== null}
-          >
-            <RefreshCw className="h-4 w-4" aria-hidden />
-          </IconButton>
+          !staticDeploy ? (
+            <IconButton
+              label="Refresh status"
+              onClick={() => {
+                void pollStatus({ clearStickyBusy: true });
+                void pollEvents({ rearmGap: true });
+              }}
+              disabled={actionBusy !== null}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden />
+            </IconButton>
+          ) : null
         }
       />
 
@@ -706,11 +710,9 @@ export default function Dashboard() {
         >
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
             <Sparkles className="h-4 w-4 text-accent-blue" aria-hidden />
-            Design a recipe
+            {t("dashboard.design")}
           </div>
-          <p className="mt-1 text-xs text-ink-muted">
-            Text or bag image to candidate, then save an immutable revision.
-          </p>
+          <p className="mt-1 text-xs text-ink-muted">{t("dashboard.designHint")}</p>
         </Link>
         <Link
           to="/recipes"
@@ -718,16 +720,16 @@ export default function Dashboard() {
         >
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
             <Beaker className="h-4 w-4 text-accent-green" aria-hidden />
-            Browse recipes
+            {t("dashboard.recipes")}
           </div>
           <p className="mt-1 text-xs text-ink-muted">
-            Open recipes and brew a saved revision.
+            {t("dashboard.recipesHint")}
           </p>
         </Link>
       </div>
 
       {webBle ? (
-        <Panel title="Web Bluetooth" className="mb-4">
+        <Panel title={t("dashboard.webBle")} className="mb-4">
           <div className="space-y-3">
             <div className="flex flex-wrap gap-1.5">
               <StatusPill
@@ -754,15 +756,19 @@ export default function Dashboard() {
             </div>
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
               <FieldRow
-                label="Device"
+                label={t("dashboard.device")}
                 value={
                   bleSnapshot.deviceName ||
                   bleSnapshot.deviceId ||
-                  "Not connected"
+                  t("dashboard.notConnected")
                 }
               />
               <FieldRow
-                label="Cup weight"
+                label={t("dashboard.phase")}
+                value={bleSnapshot.machineStateName ?? bleSnapshot.phase}
+              />
+              <FieldRow
+                label={t("dashboard.cup")}
                 value={
                   bleSnapshot.cupWeightG != null
                     ? `${bleSnapshot.cupWeightG} g`
@@ -770,22 +776,14 @@ export default function Dashboard() {
                 }
               />
               <FieldRow
-                label="Dispensed water"
+                label={t("dashboard.water")}
                 value={
                   bleSnapshot.dispensedWaterMl != null
                     ? `${bleSnapshot.dispensedWaterMl} ml`
                     : "-"
                 }
               />
-              <FieldRow
-                label="Notify frames"
-                value={String(bleSnapshot.notifyCount)}
-              />
             </dl>
-            <p className="text-xs text-ink-muted">
-              After a Web Bluetooth start you land here. Cancel uses GATT cancel
-              (not the bridge). Close the official App while connected.
-            </p>
             <div className="flex flex-wrap gap-2">
               {bleSnapshot.phase === "idle" ||
               bleSnapshot.phase === "disconnected" ||
@@ -804,7 +802,7 @@ export default function Dashboard() {
                     );
                   }}
                 >
-                  Connect Studio
+                  {t("dashboard.connect")}
                 </Button>
               ) : (
                 <Button
@@ -819,22 +817,23 @@ export default function Dashboard() {
                     );
                   }}
                 >
-                  Disconnect
+                  {t("dashboard.disconnect")}
                 </Button>
               )}
               <Button
                 variant="success"
                 size="sm"
                 disabled={actionBusy !== null}
-                onClick={() =>
+                onClick={() => {
+                  const content = sampleCoffeeIfEmpty();
                   setBrewTarget({
                     recipeRevisionId: "local:sample-hot-v1",
-                    content: defaultCoffeeRecipe(),
-                    recipeName: "Sample pour-over (local)",
-                  })
-                }
+                    content,
+                    recipeName: content.name,
+                  });
+                }}
               >
-                Brew sample coffee
+                {t("dashboard.brewSample")}
               </Button>
               {webBleCanCancel ? (
                 <Button
@@ -844,16 +843,14 @@ export default function Dashboard() {
                   onClick={() => void runControl("cancel")}
                 >
                   <XCircle className="h-3.5 w-3.5" aria-hidden />
-                  {actionBusy === "cancel" ? "Cancelling..." : "Cancel brew"}
+                  {actionBusy === "cancel"
+                    ? "…"
+                    : t("dashboard.cancelBrew")}
                 </Button>
               ) : null}
             </div>
             {staticDeploy ? (
-              <p className="text-xs text-ink-muted">
-                Static GitHub Pages build: catalog/design/history need a local
-                backend. Web Bluetooth connect + sample brew work in Chrome near
-                the machine.
-              </p>
+              <p className="text-xs text-ink-muted">{t("dashboard.staticHint")}</p>
             ) : null}
           </div>
         </Panel>
