@@ -1,6 +1,6 @@
 /**
  * Design page — local multimodal API (Settings).
- * Multi-image: upload and/or paste from clipboard, with previews.
+ * Multi-image upload + single-image clipboard paste, with previews and live stream log.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,7 +22,7 @@ import {
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { isAiConfigured, readAiConfig } from "../lib/aiConfig";
-import { designWithLocalAi } from "../lib/localDesign";
+import { designWithLocalAi, type DesignProgressEvent } from "../lib/localDesign";
 import { saveUserRecipe, validateLocalContent } from "../lib/localRecipes";
 import { isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
 import { useMachine } from "../machine/MachineContext";
@@ -44,8 +44,26 @@ function newId(): string {
 
 function isImageFile(file: File): boolean {
   if (file.type.startsWith("image/")) return true;
-  // Some clipboard pastes omit type; sniff extension.
   return /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name);
+}
+
+/**
+ * One paste action → at most one image (the last image entry on the clipboard).
+ * Avoids Chrome exposing the same image via both items[] and files[] (×3 dupes).
+ */
+function latestClipboardImage(data: DataTransfer | null): File | null {
+  if (!data) return null;
+  const fromItems: File[] = [];
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const f = item.getAsFile();
+      if (f) fromItems.push(f);
+    }
+  }
+  if (fromItems.length) return fromItems[fromItems.length - 1]!;
+  const fromFiles = Array.from(data.files ?? []).filter(isImageFile);
+  if (fromFiles.length) return fromFiles[fromFiles.length - 1]!;
+  return null;
 }
 
 export default function Design() {
@@ -53,11 +71,13 @@ export default function Design() {
   const { driver } = useMachine();
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const pasteZoneRef = useRef<HTMLDivElement>(null);
+  const streamEndRef = useRef<HTMLDivElement>(null);
 
   const [text, setText] = useState("");
   const [images, setImages] = useState<ImageItem[]>([]);
   const [designing, setDesigning] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const [stages, setStages] = useState<string[]>([]);
   const [designError, setDesignError] = useState<string | null>(null);
   const [rationale, setRationale] = useState<string | null>(null);
   const [candidate, setCandidate] = useState<RecipeContent | null>(null);
@@ -76,6 +96,10 @@ export default function Design() {
     };
   }, []);
 
+  useEffect(() => {
+    streamEndRef.current?.scrollIntoView({ block: "nearest" });
+  }, [streamText, stages]);
+
   const addFiles = useCallback((files: FileList | File[] | null) => {
     if (!files) return;
     const list = Array.from(files).filter(isImageFile);
@@ -89,6 +113,20 @@ export default function Design() {
         previewUrl: URL.createObjectURL(file),
       }));
       return [...prev, ...next];
+    });
+  }, []);
+
+  const addOneFile = useCallback((file: File) => {
+    setImages((prev) => {
+      if (prev.length >= MAX_IMAGES) return prev;
+      return [
+        ...prev,
+        {
+          id: newId(),
+          file,
+          previewUrl: URL.createObjectURL(file),
+        },
+      ];
     });
   }, []);
 
@@ -107,59 +145,34 @@ export default function Design() {
     });
   }, []);
 
-  const onPaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items?.length) return;
-      const files: File[] = [];
-      for (const item of Array.from(items)) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          const f = item.getAsFile();
-          if (f) files.push(f);
-        }
-      }
-      // Also check files list (some browsers)
-      if (e.clipboardData?.files?.length) {
-        for (const f of Array.from(e.clipboardData.files)) {
-          if (isImageFile(f) && !files.includes(f)) files.push(f);
-        }
-      }
-      if (files.length) {
-        e.preventDefault();
-        addFiles(files);
-      }
-    },
-    [addFiles],
-  );
-
-  // Global paste when focus is on the design page (not only in textarea).
+  // Single global paste handler — only the latest clipboard image.
   useEffect(() => {
     const onWindowPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
-      // Don't steal paste from unrelated inputs outside design panel.
       if (target?.closest?.("[data-design-no-image-paste]")) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const files: File[] = [];
-      for (const item of Array.from(items)) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          const f = item.getAsFile();
-          if (f) files.push(f);
-        }
-      }
-      if (files.length) {
-        e.preventDefault();
-        addFiles(files);
-      }
+      const file = latestClipboardImage(e.clipboardData);
+      if (!file) return;
+      e.preventDefault();
+      addOneFile(file);
     };
     window.addEventListener("paste", onWindowPaste);
     return () => window.removeEventListener("paste", onWindowPaste);
-  }, [addFiles]);
+  }, [addOneFile]);
+
+  const onProgress = useCallback((ev: DesignProgressEvent) => {
+    if (ev.kind === "stage") {
+      setStages((s) => [...s, ev.message]);
+    } else {
+      setStreamText((prev) => prev + ev.text);
+    }
+  }, []);
 
   const runDesign = async () => {
     setDesignError(null);
     setSaveMsg(null);
     setRationale(null);
+    setStreamText("");
+    setStages([]);
     if (!aiOk) {
       setDesignError(t("design.needAi"));
       return;
@@ -169,9 +182,13 @@ export default function Design() {
       const result = await designWithLocalAi({
         text,
         images: images.map((i) => i.file),
+        onProgress,
       });
       setCandidate(result.content);
       setRationale(result.rationale);
+      if (result.streamLog && !streamText) {
+        setStreamText(result.streamLog);
+      }
       const v = validateLocalContent(result.content);
       setValidateMsg(v.valid ? null : v.message);
     } catch (e) {
@@ -212,19 +229,13 @@ export default function Design() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title={t("design.title")}>
-          <div
-            ref={pasteZoneRef}
-            className="space-y-3"
-            onPaste={onPaste}
-            tabIndex={0}
-          >
+          <div className="space-y-3">
             <Field label={t("design.placeholder")} htmlFor="design-text">
               <TextArea
                 id="design-text"
                 rows={4}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                onPaste={onPaste}
                 placeholder={t("design.placeholder")}
               />
             </Field>
@@ -312,10 +323,7 @@ export default function Design() {
                   ))}
                 </ul>
               ) : (
-                <div
-                  className="mt-3 rounded-md border border-dashed border-line bg-surface-2/40 px-3 py-6 text-center text-xs text-ink-muted"
-                  onPaste={onPaste}
-                >
+                <div className="mt-3 rounded-md border border-dashed border-line bg-surface-2/40 px-3 py-6 text-center text-xs text-ink-muted">
                   {t("design.pasteHint")}
                 </div>
               )}
@@ -330,6 +338,29 @@ export default function Design() {
             >
               {designing ? t("common.loading") : t("design.run")}
             </Button>
+
+            {(designing || stages.length > 0 || streamText) && (
+              <div className="rounded-md border border-line bg-paper">
+                <div className="border-b border-line px-3 py-1.5 text-xs font-medium text-ink-muted">
+                  {t("design.thinking")}
+                </div>
+                <div className="max-h-56 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-ink">
+                  {stages.map((s, i) => (
+                    <div key={i} className="text-accent-blue">
+                      ▸ {s}
+                    </div>
+                  ))}
+                  {streamText ? (
+                    <pre className="mt-1 whitespace-pre-wrap break-words text-ink-muted">
+                      {streamText}
+                    </pre>
+                  ) : designing ? (
+                    <div className="text-ink-faint">…</div>
+                  ) : null}
+                  <div ref={streamEndRef} />
+                </div>
+              </div>
+            )}
           </div>
         </Panel>
 
