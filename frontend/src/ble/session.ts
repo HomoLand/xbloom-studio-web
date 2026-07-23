@@ -165,13 +165,31 @@ export class WebBleSession {
     }
   }
 
-  async connect(): Promise<void> {
-    await this.disconnect();
-    this.setPhase("connecting");
+  /**
+   * Connect or reconnect.
+   * - First time: browser device picker (user gesture).
+   * - After Disconnect: reuses the last paired device without a second picker
+     (avoids the “stuck on Connect” hang when Chrome does not re-open the chooser).
+   */
+  async connect(opts: { forcePicker?: boolean } = {}): Promise<void> {
+    this.stopTerminalWatch();
     this.setupInProgress = true;
+    this.setPhase("connecting");
+    // Tear down the previous link but keep the paired device for fast reconnect.
+    if (this.stopNotify) {
+      this.stopNotify();
+      this.stopNotify = null;
+    }
+    disconnectGatt(this.handles);
+    this.handles = null;
+    await sleep(150);
+
     try {
-      const device = await requestStudioDevice();
-      this.device = device;
+      let device = this.device;
+      if (!device || opts.forcePicker) {
+        device = await requestStudioDevice();
+        this.device = device;
+      }
       this.bindDisconnectListener(device);
       this.handles = await connectGatt(device);
       this.notifyCount = 0;
@@ -184,22 +202,20 @@ export class WebBleSession {
       this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
         this.onNotifyChunk(dv),
       );
-      // Brief settle before first write (Windows GATT race).
       await sleep(100);
       if (!isGattConnected(this.handles)) {
-        // One automatic reconnect before failing the user gesture.
         this.handles = await connectGatt(device);
         this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
           this.onNotifyChunk(dv),
         );
         await sleep(100);
       }
-      // Post-connect settle query (same idea as core load_recipe).
       await writeCommand(this.handles, buildStatusQuery());
       this.setupInProgress = false;
       this.setPhase("connected");
     } catch (err) {
       this.setupInProgress = false;
+      // Keep this.device so the next Connect can retry without a full page reload.
       this.cleanupHandles(true);
       const message =
         err instanceof BleGattError
@@ -207,19 +223,31 @@ export class WebBleSession {
           : err instanceof Error
             ? err.message
             : String(err);
+      // If cached device is dead, clear it so the next attempt opens the picker.
+      if (/not found|no longer|permission|failed/i.test(message)) {
+        this.unbindDisconnectListener();
+        this.device = null;
+      }
       this.setPhase("error", message);
       throw err;
     }
   }
 
+  /** Soft disconnect: drop GATT, keep paired device for one-tap reconnect. */
   async disconnect(): Promise<void> {
     this.stopTerminalWatch();
     this.setupInProgress = false;
     this.cleanupHandles(true);
+    this.loaded = false;
+    // Intentionally keep this.device + disconnect listener owner for reconnect.
+    this.setPhase("idle");
+  }
+
+  /** Forget paired device (next Connect shows the picker again). */
+  async forgetDevice(): Promise<void> {
+    await this.disconnect();
     this.unbindDisconnectListener();
     this.device = null;
-    this.loaded = false;
-    this.setPhase("idle");
   }
 
   /**

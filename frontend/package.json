@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test src/lib/monitorLogic.test.ts src/lib/apiErrors.test.ts src/ble/framing.test.ts src/ble/telemetry.test.ts src/ble/load.test.ts src/ble/session.terminal.test.ts src/machine/driver.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/monitorLogic.test.ts src/lib/apiErrors.test.ts src/lib/localRecipes.test.ts src/ble/framing.test.ts src/ble/telemetry.test.ts src/ble/load.test.ts src/ble/session.terminal.test.ts src/machine/driver.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium"
   },
