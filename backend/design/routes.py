@@ -1,4 +1,4 @@
-"""Typed ``POST /api/design`` HTTP adapter (JSON + multipart)."""
+"""Typed design HTTP adapter (config + POST JSON/multipart)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,15 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from design.config import DESIGN_BEVERAGE_MAX_CHARS, DESIGN_TEXT_MAX_CHARS
-from design.errors import DesignError, DesignValidationError
+from design.config import (
+    DESIGN_BEVERAGE_MAX_CHARS,
+    DESIGN_TEXT_MAX_CHARS,
+    load_design_config,
+)
+from design.errors import DesignConfigError, DesignError, DesignValidationError
 from design.prompts import ALLOWED_BEVERAGE_HINTS
 from design.service import (
     DesignInput,
@@ -140,6 +144,94 @@ class DesignJsonBody(BaseModel):
         default=None,
         description="Optional hint: coffee or tea only",
     )
+
+
+class DesignImageWhenAttached(BaseModel):
+    """Whether image bytes vs OCR text leave the machine when an image is attached."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    image_bytes_leave_machine: bool
+    ocr_text_leave_machine: bool
+
+
+class DesignImageDataFate(BaseModel):
+    """Exact public image-data fate for the configured design mode (no secrets)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    original_image_stored: bool
+    when_image_attached: DesignImageWhenAttached
+    summary: str
+
+
+class DesignConfigResponse(BaseModel):
+    """Public design disclosure for the browser (no secrets, no paths)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    model: str
+    design_mode: Literal["vision", "text"]
+    image_data_fate: DesignImageDataFate
+
+
+@router.get("/design/config", response_model=DesignConfigResponse)
+def design_public_config() -> DesignConfigResponse | JSONResponse:
+    """Read-only design config for UI disclosure.
+
+    No provider network call, no BLE, no secrets. Exposes only provider, model,
+    design_mode, and the exact image-data fate for the configured mode.
+    Prefer the process service config when already initialized so the UI matches
+    the live design path; otherwise load from environment defaults.
+    """
+
+    try:
+        service = get_design_service_if_initialized()
+        if service is not None:
+            cfg = service.config
+        else:
+            try:
+                cfg = load_design_config()
+            except ValueError as exc:
+                raise DesignConfigError(str(exc), code="configuration_error") from exc
+
+        mode = cfg.design_mode
+        if mode not in {"vision", "text"}:
+            raise DesignConfigError(
+                f"invalid design mode: {mode}",
+                code="configuration_error",
+            )
+
+        # Exact fate when an image is attached for this mode.
+        # Original image is never stored on the server.
+        image_bytes_leave = mode == "vision"
+        ocr_text_leave = mode == "text"
+        design_mode: Literal["vision", "text"] = mode  # validated above
+        return DesignConfigResponse(
+            provider=cfg.provider,
+            model=cfg.model,
+            design_mode=design_mode,
+            image_data_fate=DesignImageDataFate(
+                original_image_stored=False,
+                when_image_attached=DesignImageWhenAttached(
+                    image_bytes_leave_machine=image_bytes_leave,
+                    ocr_text_leave_machine=ocr_text_leave,
+                ),
+                summary=(
+                    "Image bytes are sent to the configured provider; "
+                    "the original image is not stored."
+                    if image_bytes_leave
+                    else (
+                        "Image bytes stay on the machine for local OCR; "
+                        "only OCR text is sent to the provider; "
+                        "the original image is not stored."
+                    )
+                ),
+            ),
+        )
+    except DesignError as exc:
+        return _error_response(exc)
 
 
 def _api_key_for_redaction() -> str:
@@ -408,5 +500,6 @@ async def _parse_multipart_form(form: Any, *, max_image_bytes: int) -> DesignInp
     )
 
 
-# Keep DesignJsonBody referenced for OpenAPI / contract introspection.
+# Keep request/response models referenced for OpenAPI / contract introspection.
 _ = DesignJsonBody
+_ = DesignConfigResponse

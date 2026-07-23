@@ -1,54 +1,91 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
+import { useAuth } from "./auth/AuthContext";
+import { AppShell } from "./components/AppShell";
+import { Alert, Button, Spinner } from "./components/ui";
 import Dashboard from "./pages/Dashboard";
-import Recipes from "./pages/Recipes";
-import Catalog from "./pages/Catalog";
+import Design from "./pages/Design";
 import History from "./pages/History";
-
-const nav = [
-  { to: "/", label: "Dashboard", end: true },
-  { to: "/recipes", label: "配方库" },
-  { to: "/catalog", label: "私有目录" },
-  { to: "/history", label: "冲煮历史" },
-];
+import Pair from "./pages/Pair";
+import Recipes from "./pages/Recipes";
+import Settings from "./pages/Settings";
 
 export default function App() {
-  return (
-    <div className="flex h-full">
-      <aside className="w-56 shrink-0 border-r border-white/10 bg-[#0f1115] flex flex-col">
-        <div className="px-5 py-5 border-b border-white/10">
-          <div className="text-[15px] font-semibold tracking-tight">xBloom Studio</div>
-          <div className="text-xs text-white/40 mt-0.5">Web Control</div>
+  const { status, error, mode, refresh } = useAuth();
+
+  if (status === "loading") {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner label="Starting xBloom Studio" />
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="mx-auto flex h-full max-w-md flex-col justify-center px-4">
+        <div className="mb-4 text-center">
+          <div className="text-sm font-semibold text-ink">xBloom Studio</div>
+          <p className="mt-1 text-xs text-ink-muted">Could not reach the host</p>
         </div>
-        <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5">
-          {nav.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.end}
-              className={({ isActive }) =>
-                `px-3 py-2 rounded-md text-sm transition-colors ${
-                  isActive
-                    ? "bg-white/10 text-white"
-                    : "text-white/60 hover:text-white hover:bg-white/5"
-                }`
-              }
-            >
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="px-4 py-3 border-t border-white/10 text-[11px] text-white/30 leading-relaxed">
-          非官方社区项目<br />BLE 协议逆向工程
+        <Alert tone="red">{error ?? "Unknown auth bootstrap error"}</Alert>
+        <div className="mt-4">
+          <Button variant="primary" className="w-full" onClick={() => void refresh()}>
+            Retry
+          </Button>
         </div>
-      </aside>
-      <main className="flex-1 overflow-auto">
+      </div>
+    );
+  }
+
+  // Unauthenticated LAN: focused pairing screen only (no app shell).
+  if (status === "needs_pairing") {
+    return (
+      <div className="min-h-full bg-paper">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/recipes" element={<Recipes />} />
-          <Route path="/catalog" element={<Catalog />} />
-          <Route path="/history" element={<History />} />
+          <Route path="/pair" element={<Pair />} />
+          <Route path="*" element={<UnauthenticatedGate mode={mode} />} />
         </Routes>
-      </main>
+      </div>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route path="/pair" element={<Pair />} />
+      <Route element={<AppShell />}>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/design" element={<Design />} />
+        <Route path="/recipes" element={<Recipes />} />
+        <Route path="/history" element={<History />} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/catalog" element={<Navigate to="/recipes" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
+}
+
+function UnauthenticatedGate({ mode }: { mode: "loopback" | "lan" | null }) {
+  return (
+    <div className="mx-auto flex min-h-full max-w-md flex-col justify-center px-4 py-10">
+      <img
+        src="/studio-machine.png"
+        alt=""
+        className="mx-auto mb-5 h-24 w-auto opacity-85"
+        draggable={false}
+      />
+      <h1 className="text-center text-lg font-semibold text-ink">xBloom Studio</h1>
+      <p className="mt-1 text-center text-sm text-ink-muted">
+        {mode === "lan"
+          ? "This host requires pairing. Open a one-time pairing link from a trusted device."
+          : "Authentication required."}
+      </p>
+      <div className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm text-ink-muted">
+        <p>
+          Create a pairing link from Settings on a trusted machine, then open it
+          on this device.
+        </p>
+      </div>
     </div>
   );
 }

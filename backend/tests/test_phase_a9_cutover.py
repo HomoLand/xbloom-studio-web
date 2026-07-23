@@ -203,8 +203,18 @@ def test_mcp_does_not_import_or_call_raw_bridge_call_or_manual_ensure():
 
 
 def test_frontend_explicit_workflow_and_cancel_no_generic_call():
+    """Phase C: typed client + brew confirmation; Dashboard is overview-only.
+
+    Full event polling/recovery remains a later batch. Brew load/start uses
+    recipe_revision_id + exact workflow_id + one request_id per action in
+    BrewConfirmDialog (not path-based Dashboard load).
+    """
+
     api_src = _read(REPO_ROOT / "frontend" / "src" / "api.ts")
     dash_src = _read(REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx")
+    brew_src = _read(
+        REPO_ROOT / "frontend" / "src" / "components" / "BrewConfirmDialog.tsx"
+    )
 
     assert "bridgeCall" not in api_src
     assert "bridgeCall" not in dash_src
@@ -212,38 +222,30 @@ def test_frontend_explicit_workflow_and_cancel_no_generic_call():
     assert "coffeeLoad" in api_src
     assert "cancel:" in api_src or "cancel =" in api_src or "cancel(" in api_src
     assert "/device/cancel" in api_src
-    assert "workflowId" in dash_src
-    assert "newRequestId" in dash_src
     assert "active_workflow_id" in api_src
+    # Load is revision-id only (no recipe path field on device load).
+    assert "recipe_revision_id" in api_src
+    assert re.search(r"coffeeLoad\([^)]*path", api_src) is None
 
-    # Loaded phase renders cancel and invokes api.cancel with workflow + request id.
-    assert 'phase === "loaded"' in dash_src or "phase === 'loaded'" in dash_src
-    assert "doControl(" in dash_src and "cancel" in dash_src
-    assert "api.cancel" in dash_src
-    # doControl typing includes cancel and generates one request_id per action.
-    assert '"cancel"' in dash_src or "'cancel'" in dash_src
-    assert "newRequestId(label)" in dash_src
+    # Dashboard remains a bridge/workflow overview bridge for the next batch.
+    assert "workflowId" in dash_src or "workflow_id" in dash_src or "active_workflow" in dash_src
+    assert "active_workflow_id" in dash_src or "activeWorkflow" in dash_src
+    # No full event-poll loop on Dashboard in this batch.
+    assert "clearInterval(timer)" not in dash_src
+    assert "api.bridgeEvents" not in dash_src
 
-    # Effect cleanup only clears observation timer — no cancel/stop/disconnect.
-    # Look for the poll effect cleanup pattern.
-    assert "clearInterval(timer)" in dash_src
-    cleanup_idx = dash_src.index("clearInterval(timer)")
-    # Nearby cleanup must not invoke control APIs.
-    window = dash_src[max(0, cleanup_idx - 200) : cleanup_idx + 120]
-    assert "api.cancel" not in window
-    assert "api.stop" not in window
-    assert "api.disconnect" not in window if "disconnect" in api_src else True
-    # Broader: unmount path should not call cancel/stop as cleanup side effects.
-    # The only cancel invocation is the loaded-phase button via doControl.
-    cancel_invocations = [
-        line.strip()
-        for line in dash_src.splitlines()
-        if "api.cancel" in line or 'doControl("cancel"' in line or "doControl('cancel'" in line
-    ]
-    assert cancel_invocations, "Dashboard must invoke cancel for loaded workflows"
-    for line in cancel_invocations:
-        assert "useEffect" not in line
-        assert "return ()" not in line
+    # Brew confirmation owns load/start with one newRequestId per action.
+    assert "newRequestId" in brew_src
+    assert "newRequestId(" in brew_src
+    assert "recipe_revision_id" in brew_src or "recipeRevisionId" in brew_src
+    assert "coffeeLoad" in brew_src or "api.coffeeLoad" in brew_src
+    assert "workflow_id" in brew_src
+    # Start failure must preserve workflow id (no automatic second load).
+    assert "Loaded workflow" in brew_src or "preserve" in brew_src.lower()
+    assert "setLoadedWorkflowId" in brew_src
+    # request_id comes from newRequestId; workflow_id comes only from load/status.
+    assert "newRequestId(\"load\")" in brew_src or "newRequestId('load')" in brew_src
+    assert "newRequestId(\"start\")" in brew_src or "newRequestId('start')" in brew_src
 
 
 def test_main_still_ensures_daemon_on_startup_not_shutdown():
