@@ -22,6 +22,7 @@ export {
   BleGattError,
   connectGatt,
   disconnectGatt,
+  isGattConnected,
   requestStudioDevice,
   writeCommand,
   type GattHandles,
