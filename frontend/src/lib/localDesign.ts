@@ -30,25 +30,28 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-const SYSTEM = `You are an xBloom Studio pour-over recipe designer.
-The user may attach multiple images (e.g. bean-bag front + brew/recipe card).
-Use all images together: bag for origin/process/notes, card for official parameters when present.
-You may briefly reason step-by-step in natural language first, then return ONLY a single JSON object
-(no markdown fences) with this shape as the final answer:
+function systemPrompt(locale: string): string {
+  const zh = locale.startsWith("zh");
+  if (zh) {
+    return `你是 xBloom Studio 手冲配方设计师。用户可能附带多张图片（豆袋封面 + 官方冲泡卡等）。
+综合所有图片：豆袋看产地/处理法/风味，冲泡卡看官方参数（若有）。
+**输出主语言必须是简体中文**：配方 name、各段 pours[].label、note、rationale 以及你的思考过程都用中文。
+kind / pattern / vibration 等枚举字段保持英文机器值不变。
+你可以先用中文简短推理，最后只输出一个 JSON 对象（不要 markdown 代码围栏）：
 {
-  "name": string,
+  "name": string（中文）,
   "kind": "hot" | "flash-brew",
   "dripper": "Omni Dripper 2",
   "dose_g": number,
-  "grind": number (1-80 or 0 for no-grind),
+  "grind": number (1-80 或 0 表示不研磨),
   "ratio": number,
   "water_ml": number,
   "hot_water_ml": number,
   "ice_g": number | null,
-  "note": string,
+  "note": string（中文）,
   "pours": [
     {
-      "label": string,
+      "label": string（中文，如「闷蒸」「主注」「收尾」）,
       "ml": number,
       "temp_c": number,
       "pattern": "spiral" | "circular" | "center" | "ring",
@@ -58,10 +61,30 @@ You may briefly reason step-by-step in natural language first, then return ONLY 
       "flow_ml_s": number
     }
   ],
+  "rationale": string（中文设计依据）
+}
+首杯偏保守。各段 ml 之和应接近 hot_water_ml。以 JSON 对象结尾。`;
+  }
+  return `You are an xBloom Studio pour-over recipe designer.
+The user may attach multiple images (e.g. bean-bag front + brew/recipe card).
+Use all images together. You may briefly reason, then return ONLY one JSON object
+(no markdown fences) with name/labels/note/rationale in English:
+{
+  "name": string,
+  "kind": "hot" | "flash-brew",
+  "dripper": "Omni Dripper 2",
+  "dose_g": number,
+  "grind": number,
+  "ratio": number,
+  "water_ml": number,
+  "hot_water_ml": number,
+  "ice_g": number | null,
+  "note": string,
+  "pours": [{ "label": string, "ml": number, "temp_c": number, "pattern": "spiral"|"circular"|"center"|"ring", "vibration": "none"|"before"|"after"|"both", "pause_s": number, "rpm": number, "flow_ml_s": number }],
   "rationale": string
 }
-Prefer conservative first cups. Sum of pour ml should match hot_water_ml.
-If you write reasoning before the JSON, keep it short and end with the JSON object.`;
+Prefer conservative first cups. Sum of pour ml ≈ hot_water_ml.`;
+}
 
 function extractJson(text: string): unknown {
   const trimmed = text.trim();
@@ -217,6 +240,8 @@ export async function designWithLocalAi(opts: {
   images?: File[];
   image?: File | null;
   config?: AiConfig;
+  /** UI language; defaults to zh-CN for Chinese recipe output. */
+  locale?: string;
   onProgress?: (ev: DesignProgressEvent) => void;
 }): Promise<LocalDesignResult> {
   const cfg = opts.config ?? readAiConfig();
@@ -225,6 +250,9 @@ export async function designWithLocalAi(opts: {
       "Configure an OpenAI-compatible multimodal API in Settings first.",
     );
   }
+  const locale = opts.locale ?? "zh-CN";
+  const zh = locale.startsWith("zh");
+  const system = systemPrompt(locale);
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const url = `${base}/chat/completions`;
   const onProgress = opts.onProgress;
@@ -236,21 +264,31 @@ export async function designWithLocalAi(opts: {
   onProgress?.({
     kind: "stage",
     message: files.length
-      ? `准备 ${files.length} 张图片…`
-      : "准备请求（无图，纯文字）…",
+      ? zh
+        ? `准备 ${files.length} 张图片…`
+        : `Preparing ${files.length} image(s)…`
+      : zh
+        ? "准备请求（无图，纯文字）…"
+        : "Preparing text-only request…",
   });
 
   const userContent: Array<Record<string, unknown>> = [];
   const prompt =
     opts.text.trim() ||
     (files.length
-      ? "Design an xBloom Studio pour-over from the attached image(s) (bag and/or brew card)."
-      : "Design a balanced 15g hot pour-over for xBloom Studio Omni Dripper 2.");
+      ? zh
+        ? "请根据附图（豆袋和/或冲泡卡）设计一份 xBloom Studio 手冲配方；名称、段名、备注、设计依据请用简体中文。"
+        : "Design an xBloom Studio pour-over from the attached image(s) (bag and/or brew card)."
+      : zh
+        ? "请设计一份 15g 均衡热冲 Omni Dripper 2 配方；名称、段名、备注、设计依据请用简体中文。"
+        : "Design a balanced 15g hot pour-over for xBloom Studio Omni Dripper 2.");
   userContent.push({ type: "text", text: prompt });
   for (let i = 0; i < files.length; i++) {
     onProgress?.({
       kind: "stage",
-      message: `编码图片 ${i + 1}/${files.length}…`,
+      message: zh
+        ? `编码图片 ${i + 1}/${files.length}…`
+        : `Encoding image ${i + 1}/${files.length}…`,
     });
     const dataUrl = await fileToDataUrl(files[i]!);
     userContent.push({
@@ -261,7 +299,9 @@ export async function designWithLocalAi(opts: {
 
   onProgress?.({
     kind: "stage",
-    message: `调用模型 ${cfg.model}（流式）…`,
+    message: zh
+      ? `调用模型 ${cfg.model}（流式）…`
+      : `Calling model ${cfg.model} (stream)…`,
   });
 
   const res = await fetch(url, {
@@ -275,7 +315,7 @@ export async function designWithLocalAi(opts: {
       temperature: 0.4,
       stream: true,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: system },
         { role: "user", content: userContent },
       ],
     }),
@@ -286,13 +326,17 @@ export async function designWithLocalAi(opts: {
     if (res.status === 400 || res.status === 422) {
       onProgress?.({
         kind: "stage",
-        message: "流式不可用，改为一次性响应…",
+        message: zh
+          ? "流式不可用，改为一次性响应…"
+          : "Stream unavailable; using one-shot response…",
       });
       return designWithLocalAiNonStream({
         cfg,
         url,
+        system,
         userContent,
         onProgress,
+        locale,
       });
     }
     const body = await res.text().catch(() => "");
@@ -349,13 +393,15 @@ export async function designWithLocalAi(opts: {
   }
   if (!rawText) throw new Error("Empty model response");
 
-  onProgress?.({ kind: "stage", message: "解析配方 JSON…" });
+  const doneParse = zh ? "解析配方 JSON…" : "Parsing recipe JSON…";
+  const doneMsg = zh ? "完成" : "Done";
+  onProgress?.({ kind: "stage", message: doneParse });
   const parsed = extractJson(rawText) as Record<string, unknown>;
   const content = toContent(parsed);
   const note =
     "note" in content && content.note != null ? String(content.note) : "";
   const rationale = String(parsed.rationale ?? note);
-  onProgress?.({ kind: "stage", message: "完成" });
+  onProgress?.({ kind: "stage", message: doneMsg });
 
   return {
     content,
@@ -369,10 +415,13 @@ export async function designWithLocalAi(opts: {
 async function designWithLocalAiNonStream(opts: {
   cfg: AiConfig;
   url: string;
+  system: string;
   userContent: Array<Record<string, unknown>>;
   onProgress?: (ev: DesignProgressEvent) => void;
+  locale?: string;
 }): Promise<LocalDesignResult> {
-  const { cfg, url, userContent, onProgress } = opts;
+  const { cfg, url, system, userContent, onProgress, locale } = opts;
+  const zh = (locale ?? "zh-CN").startsWith("zh");
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -384,7 +433,7 @@ async function designWithLocalAiNonStream(opts: {
       temperature: 0.4,
       stream: false,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: system },
         { role: "user", content: userContent },
       ],
     }),
@@ -413,7 +462,10 @@ async function designWithLocalAiNonStream(opts: {
     onProgress?.({ kind: "delta", text: rawText });
   }
   if (!rawText && !reasoning) throw new Error("Empty model response");
-  onProgress?.({ kind: "stage", message: "解析配方 JSON…" });
+  onProgress?.({
+    kind: "stage",
+    message: zh ? "解析配方 JSON…" : "Parsing recipe JSON…",
+  });
   const parsed = extractJson(rawText || reasoning) as Record<string, unknown>;
   const content = toContent(parsed);
   const note =

@@ -795,7 +795,7 @@ export default function Dashboard() {
                     setActionError(null);
                   }}
                 >
-                  Cancel
+                  {t("dashboard.cancelConnecting")}
                 </Button>
               ) : bleSnapshot.phase === "idle" ||
                 bleSnapshot.phase === "disconnected" ||
@@ -857,7 +857,7 @@ export default function Dashboard() {
                 >
                   <XCircle className="h-3.5 w-3.5" aria-hidden />
                   {actionBusy === "cancel"
-                    ? "…"
+                    ? t("dashboard.cancelling")
                     : t("dashboard.cancelBrew")}
                 </Button>
               ) : null}

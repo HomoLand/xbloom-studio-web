@@ -166,24 +166,30 @@ export default function Recipes() {
             <div className="space-y-3 text-sm">
               <dl className="grid gap-1 sm:grid-cols-2 text-ink-muted">
                 <div>
-                  Kind <span className="text-ink">{detail.kind}</span>
+                  {t("recipes.kind")}{" "}
+                  <span className="text-ink">{detail.kind}</span>
                 </div>
                 <div>
-                  ID{" "}
+                  {t("common.id")}{" "}
                   <code className="text-ink">{shortId(detail.recipe_id, 14)}</code>
                 </div>
                 {isCoffeeContent(content) ? (
                   <>
-                    <div>Dose {content.dose_g} g</div>
-                    <div>Grind {content.grind}</div>
-                    <div>Water {content.water_ml} ml</div>
-                    <div>Pours {content.pours.length}</div>
+                    <div>
+                      {t("recipes.dose")} {content.dose_g} g
+                    </div>
+                    <div>
+                      {t("recipes.grind")} {content.grind}
+                    </div>
+                    <div>
+                      {t("recipes.water")} {content.water_ml} ml
+                    </div>
+                    <div>
+                      {t("recipes.pours")} {content.pours.length}
+                    </div>
                   </>
                 ) : (
-                  <div className="sm:col-span-2">
-                    Tea / non-coffee — brew via Web Bluetooth coffee path only for
-                    now.
-                  </div>
+                  <div className="sm:col-span-2">{t("recipes.teaOnly")}</div>
                 )}
               </dl>
               {isCoffeeContent(content) && content.note ? (
@@ -220,7 +226,7 @@ export default function Recipes() {
                 </Button>
                 {!canBrewWebBle && driver !== "web-bluetooth" ? (
                   <span className="text-xs text-ink-muted">
-                    Switch driver to Web Bluetooth to brew from this page.
+                    {t("recipes.needWebBle")}
                   </span>
                 ) : null}
               </div>
