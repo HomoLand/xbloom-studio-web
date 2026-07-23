@@ -91,7 +91,7 @@ export default function Pair() {
         </p>
       </div>
 
-      <div className="rounded-lg border border-line bg-surface p-4 space-y-4">
+      <div className="rounded-2xl border border-line bg-surface p-4 space-y-4">
         {missing ? (
           <Alert tone="amber" title="No pairing token">
             Open a pairing link from Settings on a trusted machine, or paste a

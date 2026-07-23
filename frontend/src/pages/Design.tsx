@@ -429,7 +429,7 @@ export default function Design() {
                   {images.map((img, idx) => (
                     <li
                       key={img.id}
-                      className="relative overflow-hidden rounded-md border border-line bg-paper"
+                      className="relative overflow-hidden rounded-xl border border-line bg-surface-2"
                     >
                       <img
                         src={img.previewUrl}
@@ -469,7 +469,7 @@ export default function Design() {
             </Button>
 
             {(designing || stages.length > 0 || streamText) && (
-              <div className="rounded-md border border-line bg-paper">
+              <div className="rounded-2xl border border-line bg-surface-2">
                 <div className="border-b border-line px-3 py-1.5 text-xs font-medium text-ink-muted">
                   {t("design.thinking")}
                 </div>

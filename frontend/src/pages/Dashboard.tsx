@@ -1112,7 +1112,7 @@ export default function Dashboard() {
                 }
               />
             </dl>
-            <div className="rounded-lg border border-line bg-paper px-3 py-2 font-mono text-[11px] break-all text-ink">
+            <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] break-all text-ink">
               {trackedId}
             </div>
 
@@ -1217,7 +1217,7 @@ function FinalSummaryPanel({
         : "neutral";
 
   return (
-    <div className="rounded-lg border border-line bg-paper p-3">
+    <div className="rounded-2xl border border-line bg-surface-2 p-3">
       <div className="flex flex-wrap items-center gap-1.5">
         <StatusPill tone={tone}>{result}</StatusPill>
         {release.kind === "released" ? (
@@ -1261,7 +1261,7 @@ function FinalSummaryPanel({
       <div className="mt-3">
         <Link
           to="/history"
-          className="text-sm font-medium text-accent-blue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
+          className="text-sm font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
         >
           Open history
         </Link>
@@ -1393,7 +1393,7 @@ function EventTimeline({ events }: { events: BridgeEvent[] }) {
           ({events.length})
         </span>
       </h3>
-      <ol className="max-h-64 space-y-1 overflow-auto rounded-lg border border-line bg-paper p-2 text-xs">
+      <ol className="max-h-64 space-y-1 overflow-auto rounded-xl border border-line bg-surface-2 p-2 text-xs">
         {rows.map((ev) => {
           const seq = Number(ev.seq);
           const type =

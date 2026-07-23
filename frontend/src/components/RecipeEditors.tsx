@@ -409,7 +409,7 @@ function PourRowCoffee({
   const rpmMax = isCenter ? 0 : 120;
 
   return (
-    <div className="rounded-lg border border-line bg-paper p-3">
+    <div className="rounded-2xl border border-line bg-surface-2 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-ink-muted">
           {t("editor.pours")} {index + 1}
@@ -635,7 +635,7 @@ export function TeaEditor({
         </div>
         <div className="space-y-2">
           {value.pours.map((p, i) => (
-            <div key={i} className="rounded-lg border border-line bg-paper p-3">
+            <div key={i} className="rounded-2xl border border-line bg-surface-2 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-ink-muted">Steep {i + 1}</span>
                 <div className="flex items-center gap-0.5">
