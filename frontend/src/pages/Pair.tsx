@@ -81,9 +81,8 @@ export default function Pair() {
       <div className="mb-6 text-center">
         <img
           src={`${import.meta.env.BASE_URL}studio-machine.png`}
-          {/* official product photography */}
-          alt=""
-          className="mx-auto mb-4 h-24 w-auto opacity-85"
+          alt="xBloom Studio"
+          className="mx-auto mb-4 h-28 w-auto object-contain opacity-95"
           draggable={false}
         />
         <h1 className="text-lg font-semibold text-ink">Pair this device</h1>
