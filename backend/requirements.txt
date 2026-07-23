@@ -1,8 +1,17 @@
-# xbloom-studio-core provides the BLE protocol, recipe validation, catalog,
-# and history modules (xbloom_ble, xbloom_safety, xbloom_catalog, xbloom_history,
-# xbloom_paths). Install it editable from the Skill scripts directory:
-#   pip install -e skills/xbloom-studio-brew/scripts
-xbloom-studio-core==1.0.1
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+# Production / release install - no sibling checkout assumption.
+# Install from the backend/ directory:
+#   python -m venv .venv
+#   .venv\Scripts\Activate.ps1   # or: source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Pins xbloom-studio-core to the published GitHub Release v1.2.0 wheel with
+# SHA-256 integrity. Do not use this file for local core development; use
+# requirements-dev.txt instead (editable core, no release wheel).
+#
+# Knowledge assets are separate: download knowledge-1.2.0.zip from the same
+# GitHub Release v1.2.0, verify SHA-256, extract it, and set XBLOOM_ASSETS_DIR
+# to the extracted bundle's assets directory.
+# knowledge-1.2.0.zip SHA-256: 6dc140917ab54ef4c8a0a6a64b79eeea7566434f6a00c62651a5e0fc3f3260eb
+
+xbloom-studio-core @ https://github.com/HomoLand/xbloom-studio-brew/releases/download/v1.2.0/xbloom_studio_core-1.2.0-py3-none-any.whl#sha256=1ef153ba4ca6633527d30a97eb03ef5383207e5bbe763d0d53a0b8e433f008d4
+-r requirements-runtime.txt

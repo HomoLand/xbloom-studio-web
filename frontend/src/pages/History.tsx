@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
 import { api, type HistoryEvent, type HistoryStatus } from "../api";
+import {
+  Alert,
+  EmptyState,
+  PageHeader,
+  Panel,
+  Spinner,
+  StatusPill,
+} from "../components/ui";
+import { shortId } from "../lib/recipeDomain";
 
-const outcomeColor: Record<string, string> = {
-  completed: "text-emerald-400",
-  loaded: "text-sky-400",
-  started: "text-amber-400",
-  cancelled: "text-white/40",
-  failed: "text-red-400",
-  completion_unconfirmed: "text-orange-400",
-  imported: "text-white/50",
+const OUTCOME_TONE: Record<
+  string,
+  "green" | "amber" | "red" | "blue" | "neutral"
+> = {
+  completed: "green",
+  loaded: "blue",
+  started: "amber",
+  cancelled: "neutral",
+  failed: "red",
+  completion_unconfirmed: "amber",
+  imported: "neutral",
 };
 
 export default function History() {
@@ -28,62 +40,92 @@ export default function History() {
   }, []);
 
   return (
-    <div className="p-8 max-w-5xl">
-      <h1 className="text-2xl font-semibold tracking-tight mb-1">冲煮历史</h1>
-      <p className="text-sm text-white/40 mb-6">本地 brew journal，用于 dial-in 复盘</p>
+    <div>
+      <PageHeader
+        title="History"
+        description="Local brew journal."
+      />
 
-      {error && (
-        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+      {error ? (
+        <Alert tone="red" className="mb-4">
           {error}
-        </div>
-      )}
+        </Alert>
+      ) : null}
 
-      {status && (
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          <Stat label="总记录" value={status.total} />
-          <Stat label="本地" value={status.by_source["local-skill"] ?? 0} />
-          <Stat label="App 导入" value={status.by_source["app-cloud"] ?? 0} />
+      {status ? (
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          <Stat label="Total" value={status.total} />
+          <Stat
+            label="Completed"
+            value={status.by_outcome?.completed ?? 0}
+          />
+          <Stat label="Failed" value={status.by_outcome?.failed ?? 0} />
         </div>
-      )}
+      ) : null}
 
-      {loading ? (
-        <div className="text-sm text-white/40">加载中…</div>
-      ) : events.length === 0 ? (
-        <div className="text-sm text-white/40">暂无历史记录</div>
-      ) : (
-        <div className="space-y-2">
-          {events.map((e) => (
-            <div
-              key={e.event_id}
-              className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className={`text-xs font-medium ${outcomeColor[e.outcome] ?? "text-white/60"}`}>
-                    {e.outcome}
-                  </span>
-                  <span className="text-sm truncate">{e.recipe_name ?? e.event_id}</span>
+      <Panel>
+        {loading ? (
+          <Spinner label="Loading history" />
+        ) : events.length === 0 ? (
+          <EmptyState
+            title="No brew events yet"
+            description="Completed loads and starts will appear here."
+          />
+        ) : (
+          <ul className="divide-y divide-line">
+            {events.map((e) => (
+              <li key={e.event_id} className="py-3 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusPill tone={OUTCOME_TONE[e.outcome] ?? "neutral"}>
+                        {e.outcome}
+                      </StatusPill>
+                      <span className="truncate text-sm font-medium text-ink">
+                        {e.recipe_name || shortId(e.event_id, 10)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-ink-faint">
+                      {e.source}
+                      {e.machine ? ` | ${e.machine}` : ""}
+                      {e.recipe_revision_id
+                        ? ` | rev ${shortId(e.recipe_revision_id, 10)}`
+                        : ""}
+                      {e.workflow_id
+                        ? ` | wf ${shortId(e.workflow_id, 10)}`
+                        : ""}
+                    </div>
+                    {e.note ? (
+                      <p className="mt-1 text-xs text-ink-muted">{e.note}</p>
+                    ) : null}
+                  </div>
+                  <time className="shrink-0 text-xs text-ink-faint">
+                    {formatWhen(e.recorded_at)}
+                  </time>
                 </div>
-                <span className="text-xs text-white/30 shrink-0">
-                  {e.recorded_at?.replace("T", " ").slice(0, 19) ?? ""}
-                </span>
-              </div>
-              {e.note && (
-                <div className="mt-1.5 text-xs text-white/50 italic">{e.note}</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-      <div className="text-2xl font-semibold tabular-nums">{value}</div>
-      <div className="text-xs text-white/40 mt-1">{label}</div>
+    <div className="rounded-lg border border-line bg-surface p-3">
+      <div className="text-xl font-semibold tabular-nums text-ink">{value}</div>
+      <div className="text-xs text-ink-muted">{label}</div>
     </div>
   );
+}
+
+function formatWhen(iso?: string): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }

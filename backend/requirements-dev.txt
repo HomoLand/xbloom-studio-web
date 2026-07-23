@@ -1,0 +1,21 @@
+# Local development install - editable core + test tools.
+# Does NOT install the GitHub release wheel (see requirements.txt for that).
+#
+# Install from the backend/ directory so the relative editable path resolves:
+#   cd backend
+#   python -m venv .venv
+#   .venv\Scripts\Activate.ps1   # or: source .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#
+# The editable path assumes a sibling xbloom-studio-brew checkout:
+#   <repo-parent>/xbloom-studio-web/backend  (this directory)
+#   <repo-parent>/xbloom-studio-brew/packages/core
+#
+# For a non-sibling layout, install core separately, e.g.:
+#   pip install -e "C:\path\to\xbloom-studio-brew\packages\core"
+#   pip install -r requirements-runtime.txt
+#   pip install -r requirements-dev.txt --no-deps   # or install pytest only
+
+-r requirements-runtime.txt
+-e ../../xbloom-studio-brew/packages/core
+pytest==8.3.5

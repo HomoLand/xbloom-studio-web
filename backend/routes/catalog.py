@@ -1,4 +1,8 @@
-"""Private recipe catalog routes (no BLE required)."""
+"""Private recipe catalog routes (no BLE required).
+
+Legacy catalog may still use local paths internally; browser HTTP responses
+and errors omit/redact them via the shared public output sanitizer.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
 
+from public_contract import redact_paths, sanitize_public_output
 from xbloom_catalog import (
     CatalogError,
     catalog_summary,
@@ -23,18 +28,19 @@ from xbloom_paths import skill_state_dir
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
 
-def _load() -> dict[str, Any]:
+def _load() -> tuple[dict[str, Any], Any]:
     try:
         path = default_catalog_path(skill_state_dir())
         return load_catalog(path), path
     except CatalogError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=redact_paths(str(exc))) from exc
 
 
 @router.get("/status")
 def status() -> dict[str, Any]:
     catalog, path = _load()
-    return {"path": str(path), **catalog_summary(catalog)}
+    # path still used internally for legacy catalog; stripped for HTTP.
+    return sanitize_public_output({"path": str(path), **catalog_summary(catalog)})
 
 
 @router.get("/list")
@@ -52,7 +58,9 @@ def list_items(
     if query is not None:
         kwargs["query"] = query
     entries = list_entries(catalog, **kwargs)
-    return {"path": str(path), "count": len(entries), "entries": entries}
+    return sanitize_public_output(
+        {"path": str(path), "count": len(entries), "entries": entries}
+    )
 
 
 @router.get("/show")
@@ -61,8 +69,8 @@ def show_item(id: str = Query(...)) -> dict[str, Any]:
     try:
         entry = get_entry(catalog, id)
     except CatalogError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return {"entry": entry}
+        raise HTTPException(status_code=404, detail=redact_paths(str(exc))) from exc
+    return sanitize_public_output({"entry": entry})
 
 
 @router.post("/import")
@@ -73,7 +81,9 @@ async def import_recipes(file: UploadFile) -> dict[str, Any]:
     try:
         payload = json.loads(content.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail=f"invalid JSON file: {exc}")
+        raise HTTPException(
+            status_code=400, detail=redact_paths(f"invalid JSON file: {exc}")
+        ) from exc
 
     catalog, path = _load()
     try:
@@ -85,5 +95,5 @@ async def import_recipes(file: UploadFile) -> dict[str, Any]:
         )
         save_catalog(catalog, path)
     except CatalogError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"path": str(path), **result}
+        raise HTTPException(status_code=400, detail=redact_paths(str(exc))) from exc
+    return sanitize_public_output({"path": str(path), **result})

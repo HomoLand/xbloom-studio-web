@@ -1,355 +1,711 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Pencil, Play, RefreshCw, Save, X } from "lucide-react";
 import {
   api,
-  type Template,
-  type CatalogEntry,
-  type CatalogEntryDetail,
-  type CatalogImportResult,
-  type ValidateResult,
+  ApiError,
+  type RecipeContent,
+  type RecipeRecord,
+  type RecipeRevision,
+  type RecipeValidateResult,
 } from "../api";
-import { RecipeDetailModal } from "./RecipeDetailModal";
+import {
+  BrewConfirmDialog,
+  type BrewTarget,
+} from "../components/BrewConfirmDialog";
+import { CoffeeEditor, TeaEditor } from "../components/RecipeEditors";
+import {
+  Alert,
+  Button,
+  EmptyState,
+  IconButton,
+  PageHeader,
+  Panel,
+  Spinner,
+  StatusPill,
+} from "../components/ui";
+import {
+  cloneContent,
+  contentIdentity,
+  isCoffeeContent,
+  isTeaContent,
+  recipeDisplayName,
+  shortId,
+  storageKindOf,
+} from "../lib/recipeDomain";
 
-const ORIGIN_LABELS: Record<string, string> = {
-  "xbloom-hosted": "xBloom 官方",
-  "user-created": "自创",
-  shared: "分享",
-  xpod: "xPod",
-  curated: "精选",
-  "easy-mode": "易用模式",
-  "app-catalog": "App 目录",
-  xbloom: "xBloom",
-};
+const VALIDATE_DEBOUNCE_MS = 400;
 
 export default function Recipes() {
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [catalogEntries, setCatalogEntries] = useState<CatalogEntry[]>([]);
+  const navigate = useNavigate();
+  const [recipes, setRecipes] = useState<RecipeRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [validatePath, setValidatePath] = useState("");
-  const [result, setResult] = useState<ValidateResult | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [detail, setDetail] = useState<CatalogEntryDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailRecipe, setDetailRecipe] = useState<RecipeRecord | null>(null);
+  const [latest, setLatest] = useState<RecipeRevision | null>(null);
+  const [revisions, setRevisions] = useState<RecipeRevision[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [importResult, setImportResult] = useState<CatalogImportResult | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      api.templates().then((r) => r.templates).catch(() => [] as Template[]),
-      api.catalogList().then((r) => r.entries).catch(() => [] as CatalogEntry[]),
-    ])
-      .then(([t, c]) => {
-        setTemplates(t);
-        setCatalogEntries(c);
-      })
-      .finally(() => setLoading(false));
+  // Edit mode for latest revision (creates a new immutable revision on save).
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState<RecipeContent | null>(null);
+  const [editContentId, setEditContentId] = useState<string | null>(null);
+  const [editParentId, setEditParentId] = useState<string | null>(null);
+  const [validateState, setValidateState] = useState<RecipeValidateResult | null>(
+    null,
+  );
+  const [validatedForId, setValidatedForId] = useState<string | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [staleParent, setStaleParent] = useState(false);
+  /** After stale-parent refresh, ask user to review buffer before save. */
+  const [reviewBeforeSave, setReviewBeforeSave] = useState(false);
+
+  const detailSeq = useRef(0);
+  const validateSeq = useRef(0);
+  const lastAppliedCanonical = useRef<string | null>(null);
+
+  const abandonEditValidation = () => {
+    // Abort in-flight validation so an old response cannot write into a new selection.
+    validateSeq.current += 1;
+    setValidating(false);
+    setValidateState(null);
+    setValidatedForId(null);
+    lastAppliedCanonical.current = null;
+  };
+
+  const loadList = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await api.listRecipes({ limit: 100 });
+      setRecipes(res.recipes);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const doValidate = async () => {
-    if (!validatePath.trim()) return;
-    setBusy(true);
-    try {
-      setResult(await api.validate(validatePath.trim()));
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    void loadList();
+  }, [loadList]);
 
-  const openDetail = async (id: string) => {
+  const openDetail = async (recipeId: string) => {
+    // Do not switch recipes while a save / stale-parent refresh is in flight.
+    if (saveBusy) return;
+    const seq = ++detailSeq.current;
+    setSelectedId(recipeId);
     setDetailLoading(true);
-    setDetail(null);
+    setError(null);
+    // Never show previous recipe detail under the new selection while loading.
+    setDetailRecipe(null);
+    setLatest(null);
+    setRevisions([]);
+    // Abandon any edit/validation for the prior selection.
+    abandonEditValidation();
+    setEditing(false);
+    setEditContent(null);
+    setEditContentId(null);
+    setEditParentId(null);
+    setSaveError(null);
+    setStaleParent(false);
+    setReviewBeforeSave(false);
     try {
-      const r = await api.catalogShow(id);
-      setDetail(r.entry);
-    } catch {
-      setDetail(null);
-    } finally {
-      setDetailLoading(false);
-    }
-  };
-
-  const doImport = async (file: File) => {
-    setImporting(true);
-    setImportError(null);
-    setImportResult(null);
-    try {
-      const r = await api.catalogImport(file);
-      setImportResult(r);
-      const cl = await api.catalogList();
-      setCatalogEntries(cl.entries);
+      const [got, revs] = await Promise.all([
+        api.getRecipe(recipeId),
+        api.listRevisions(recipeId),
+      ]);
+      // Guard async races when the user selects A then B quickly.
+      if (seq !== detailSeq.current) return;
+      setDetailRecipe(got.recipe);
+      setLatest(got.latest_revision);
+      setRevisions(revs.revisions);
     } catch (e) {
-      setImportError(e instanceof Error ? e.message : String(e));
+      if (seq !== detailSeq.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+      setDetailRecipe(null);
+      setLatest(null);
+      setRevisions([]);
     } finally {
-      setImporting(false);
+      if (seq === detailSeq.current) setDetailLoading(false);
     }
   };
 
-  const coffeeTemplates = templates.filter((t) => !t.tea);
-  const teaTemplates = templates.filter((t) => t.tea);
-  const coffeeCatalog = catalogEntries.filter((e) => e.kind === "coffee");
-  const teaCatalog = catalogEntries.filter((e) => e.kind === "tea");
+  /**
+   * Normal refresh (post-save / explicit library refresh of detail):
+   * exits edit mode and reloads newest recipe/revisions/list.
+   */
+  const refreshDetail = async (recipeId: string) => {
+    const seq = ++detailSeq.current;
+    setDetailLoading(true);
+    setStaleParent(false);
+    setSaveError(null);
+    setReviewBeforeSave(false);
+    abandonEditValidation();
+    setEditing(false);
+    setEditContent(null);
+    setEditContentId(null);
+    setEditParentId(null);
+    try {
+      const [got, revs, list] = await Promise.all([
+        api.getRecipe(recipeId),
+        api.listRevisions(recipeId),
+        api.listRecipes({ limit: 100 }),
+      ]);
+      if (seq !== detailSeq.current) return;
+      setDetailRecipe(got.recipe);
+      setLatest(got.latest_revision);
+      setRevisions(revs.revisions);
+      setRecipes(list.recipes);
+    } catch (e) {
+      if (seq !== detailSeq.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (seq === detailSeq.current) setDetailLoading(false);
+    }
+  };
+
+  /**
+   * Stale-parent refresh after 409: fetch newest metadata while preserving the
+   * exact edit buffer. Never silently overwrites user edits.
+   */
+  const refreshStaleParent = async (recipeId: string) => {
+    // Capture buffer identities now; do not clear them during fetch.
+    const preservedContent = editContent;
+    const preservedId = editContentId;
+    const seq = ++detailSeq.current;
+    setSaveBusy(true);
+    setError(null);
+    try {
+      const [got, revs, list] = await Promise.all([
+        api.getRecipe(recipeId),
+        api.listRevisions(recipeId),
+        api.listRecipes({ limit: 100 }),
+      ]);
+      if (seq !== detailSeq.current) return;
+      setDetailRecipe(got.recipe);
+      setLatest(got.latest_revision);
+      setRevisions(revs.revisions);
+      setRecipes(list.recipes);
+      const newestParent = got.latest_revision?.revision_id ?? null;
+      if (newestParent) {
+        setEditParentId(newestParent);
+      }
+      // Keep editing=true and the exact edit buffer; re-validate same content.
+      setEditing(true);
+      setStaleParent(false);
+      setSaveError(null);
+      setReviewBeforeSave(true);
+      if (preservedContent && preservedId) {
+        // Invalidate any in-flight validate, then re-run for preserved buffer.
+        abandonEditValidation();
+        void runValidate(preservedContent, preservedId);
+      }
+    } catch (e) {
+      if (seq !== detailSeq.current) return;
+      // Keep edit buffer and stale warning on failure.
+      setSaveError(
+        e instanceof Error
+          ? `Could not refresh parent: ${e.message}. Your edits are still here.`
+          : "Could not refresh parent. Your edits are still here.",
+      );
+      setStaleParent(true);
+    } finally {
+      // Always clear saveBusy when this op finishes so a later legitimate
+      // selection change cannot leave the busy flag stuck. Library selection
+      // is disabled while saveBusy is true, so races are prevented at the UI.
+      setSaveBusy(false);
+    }
+  };
+
+  const startEdit = () => {
+    if (!latest?.content || !latest.revision_id) return;
+    const content = cloneContent(latest.content);
+    const id = contentIdentity(content);
+    abandonEditValidation();
+    setEditing(true);
+    setEditContent(content);
+    setEditContentId(id);
+    setEditParentId(latest.revision_id);
+    setSaveError(null);
+    setStaleParent(false);
+    setReviewBeforeSave(false);
+  };
+
+  const cancelEdit = () => {
+    abandonEditValidation();
+    setEditing(false);
+    setEditContent(null);
+    setEditContentId(null);
+    setEditParentId(null);
+    setSaveError(null);
+    setStaleParent(false);
+    setReviewBeforeSave(false);
+  };
+
+  const onEditChange = (next: RecipeContent) => {
+    validateSeq.current += 1;
+    setValidating(false);
+    setValidateState(null);
+    setValidatedForId(null);
+    lastAppliedCanonical.current = null;
+    setSaveError(null);
+    setReviewBeforeSave(false);
+    setEditContent(cloneContent(next));
+    setEditContentId(contentIdentity(next));
+  };
+
+  const runValidate = useCallback(
+    async (content: RecipeContent, forId: string) => {
+      const seq = ++validateSeq.current;
+      setValidating(true);
+      try {
+        const res = await api.validateRecipe(content);
+        if (seq !== validateSeq.current) return;
+        if (forId !== contentIdentity(content)) return;
+        setValidateState(res);
+        setValidatedForId(forId);
+        if (res.valid) {
+          const serverId = contentIdentity(res.content);
+          if (serverId !== forId && serverId !== lastAppliedCanonical.current) {
+            lastAppliedCanonical.current = serverId;
+            setEditContent(cloneContent(res.content));
+            const appliedId = contentIdentity(res.content);
+            setEditContentId(appliedId);
+            setValidatedForId(appliedId);
+            setValidateState(res);
+          }
+        }
+      } catch (e) {
+        if (seq !== validateSeq.current) return;
+        setValidateState({
+          valid: false,
+          error: {
+            category: "validation",
+            message: e instanceof Error ? e.message : String(e),
+          },
+        });
+        setValidatedForId(forId);
+      } finally {
+        if (seq === validateSeq.current) setValidating(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!editing || !editContent || !editContentId) return;
+    const handle = window.setTimeout(() => {
+      void runValidate(editContent, editContentId);
+    }, VALIDATE_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [editing, editContent, editContentId, runValidate]);
+
+  const saveRevision = async () => {
+    if (!detailRecipe || !editContent || !editContentId || !editParentId) return;
+    if (
+      !validateState ||
+      !validateState.valid ||
+      validatedForId !== editContentId ||
+      validating
+    ) {
+      setSaveError("Cannot save until the current content is validated.");
+      return;
+    }
+    const content = validateState.content;
+    // Fail closed: validated payload, editContentId, and visible buffer must match.
+    const validatedId = contentIdentity(content);
+    const visibleId = contentIdentity(editContent);
+    if (
+      validatedId !== editContentId ||
+      visibleId !== editContentId ||
+      validatedForId !== editContentId
+    ) {
+      setSaveError("Cannot save: content changed since validation.");
+      return;
+    }
+    setSaveBusy(true);
+    setSaveError(null);
+    setStaleParent(false);
+    try {
+      const saved = await api.createRevision(detailRecipe.recipe_id, {
+        content,
+        expected_parent_revision_id: editParentId,
+        name: typeof content.name === "string" ? content.name : undefined,
+      });
+      // Post-save refresh may exit edit mode.
+      setEditing(false);
+      setEditContent(null);
+      setEditContentId(null);
+      setEditParentId(null);
+      setValidateState(null);
+      setValidatedForId(null);
+      setReviewBeforeSave(false);
+      setDetailRecipe(saved.recipe);
+      setLatest(saved.revision);
+      await refreshDetail(detailRecipe.recipe_id);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 409 || e.category === "conflict")) {
+        // Keep edits; offer stale-parent refresh that preserves the buffer.
+        setStaleParent(true);
+        setSaveError(
+          "A newer revision exists. Your edits are kept. Refresh parent, review, then save.",
+        );
+      } else {
+        setSaveError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
+  const startBrew = (revision: RecipeRevision, recipeName?: string) => {
+    if (!revision.revision_id || !revision.content) return;
+    setBrewTarget({
+      recipeRevisionId: revision.revision_id,
+      content: revision.content,
+      revision,
+      recipeName: recipeName || recipeDisplayName(revision.content),
+    });
+  };
+
+  const validationMatchesCurrent =
+    !!editContent &&
+    !!editContentId &&
+    !!validateState &&
+    validateState.valid &&
+    validatedForId === editContentId &&
+    !validating;
+
+  const canSave =
+    editing &&
+    validationMatchesCurrent &&
+    !saveBusy &&
+    !!editParentId &&
+    !staleParent;
+
+  // Never render recipe A's detail under selection B while B is loading.
+  const showDetailLoading =
+    detailLoading ||
+    (!!selectedId &&
+      !!detailRecipe &&
+      detailRecipe.recipe_id !== selectedId);
 
   return (
-    <div className="p-8 max-w-5xl">
-      <h1 className="text-2xl font-semibold tracking-tight mb-1">配方库</h1>
-      <p className="text-sm text-white/40 mb-6">
-        内置模板、私有目录配方与配方校验
-      </p>
+    <div>
+      <PageHeader
+        title="Recipes"
+        description="Browse recipes, edit the latest, or brew a revision."
+        actions={
+          <IconButton
+            label="Refresh recipes"
+            disabled={saveBusy}
+            onClick={() => void loadList()}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden />
+          </IconButton>
+        }
+      />
 
-      {/* 内置模板 */}
-      <section className="mb-8">
-        <h2 className="text-base font-medium mb-3">咖啡模板</h2>
-        {loading ? (
-          <div className="text-sm text-white/40">加载中…</div>
-        ) : coffeeTemplates.length === 0 ? (
-          <div className="text-sm text-white/30">暂无内置咖啡模板</div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {coffeeTemplates.map((t) => (
-              <TemplateCard key={t.file} t={t} />
-            ))}
-          </div>
-        )}
-      </section>
+      {error ? (
+        <Alert tone="red" className="mb-4">
+          {error}
+        </Alert>
+      ) : null}
 
-      <section className="mb-8">
-        <h2 className="text-base font-medium mb-3">茶模板（Omni Tea Brewer）</h2>
-        {loading ? (
-          <div className="text-sm text-white/40">加载中…</div>
-        ) : teaTemplates.length === 0 ? (
-          <div className="text-sm text-white/30">暂无内置茶模板</div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {teaTemplates.map((t) => (
-              <TemplateCard key={t.file} t={t} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* 私有目录 */}
-      <section className="mb-8">
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-medium">私有目录</h2>
-            <span className="text-xs text-white/30">
-              从授权 App / 云端导入的归一化配方
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void doImport(f);
-                e.target.value = "";
-              }}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+        <Panel title={`Library (${recipes.length})`}>
+          {loading ? (
+            <Spinner label="Loading recipes" />
+          ) : recipes.length === 0 ? (
+            <EmptyState
+              title="No recipes yet"
+              description="Design a candidate and save it to get started."
+              action={
+                <Button variant="primary" size="sm" onClick={() => navigate("/design")}>
+                  Open Design
+                </Button>
+              }
             />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importing}
-              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm font-medium disabled:opacity-50"
-            >
-              {importing ? "导入中…" : "导入 JSON"}
-            </button>
-          </div>
-        </div>
-        {importError && (
-          <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {importError}
-          </div>
-        )}
-        {importResult && (
-          <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-            导入完成：候选 {importResult.candidates} · 新增 {importResult.added} · 更新 {importResult.updated} · 拒绝 {importResult.rejected} · 总计 {importResult.total}
-            {importResult.rejections.length > 0 && (
-              <ul className="mt-2 space-y-0.5 text-xs text-emerald-200/70">
-                {importResult.rejections.slice(0, 5).map((r, i) => (
-                  <li key={i}>· #{r.index} {r.name}: {r.error}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {loading ? (
-          <div className="text-sm text-white/40">加载中…</div>
-        ) : catalogEntries.length === 0 ? (
-          <div className="text-sm text-white/30">
-            私有目录为空。通过 Skill 导入 App 配方后会在此展示。
-          </div>
-        ) : (
-          <div className="space-y-6">
-            {coffeeCatalog.length > 0 && (
+          ) : (
+            <ul className="divide-y divide-line">
+              {recipes.map((r) => {
+                const active = r.recipe_id === selectedId;
+                const rev = r.latest_revision;
+                const content = rev?.content;
+                return (
+                  <li key={r.recipe_id}>
+                    <button
+                      type="button"
+                      disabled={saveBusy}
+                      onClick={() => void openDetail(r.recipe_id)}
+                      className={`flex w-full flex-col gap-1 px-1 py-3 text-left transition-colors first:pt-0 disabled:pointer-events-none disabled:opacity-50 ${
+                        active ? "bg-surface-2/60" : "hover:bg-surface-2/40"
+                      } rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium text-ink">
+                          {r.name || "Untitled"}
+                        </span>
+                        <StatusPill
+                          tone={r.kind === "tea" ? "blue" : "green"}
+                        >
+                          {r.kind}
+                        </StatusPill>
+                      </div>
+                      <div className="text-xs text-ink-faint">
+                        {shortId(r.recipe_id, 10)}
+                        {rev
+                          ? ` | rev #${rev.revision_number} | ${shortId(rev.revision_id, 8)}`
+                          : ""}
+                        {content && isCoffeeContent(content)
+                          ? ` | ${content.dose_g ?? "?"}g`
+                          : ""}
+                        {content && isTeaContent(content)
+                          ? ` | ${content.leaf_g}g leaf`
+                          : ""}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="Detail">
+          {!selectedId ? (
+            <p className="text-sm text-ink-muted">
+              Select a recipe to inspect revisions, edit the latest, or brew.
+            </p>
+          ) : showDetailLoading ? (
+            <Spinner label="Loading detail" />
+          ) : detailRecipe ? (
+            <div className="space-y-4">
               <div>
-                <div className="text-xs text-white/40 mb-2">
-                  咖啡 · {coffeeCatalog.length} 条
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {coffeeCatalog.map((e, i) => (
-                    <CatalogCard
-                      key={e.id ?? e.table_id ?? i}
-                      e={e}
-                      onClick={e.id ? () => openDetail(e.id!) : undefined}
-                    />
-                  ))}
+                <h3 className="text-base font-semibold text-ink">
+                  {detailRecipe.name}
+                </h3>
+                <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-ink-faint">
+                  <StatusPill tone="neutral">{detailRecipe.kind}</StatusPill>
+                  <span>id {shortId(detailRecipe.recipe_id, 12)}</span>
+                  {detailRecipe.source ? (
+                    <span>source {detailRecipe.source}</span>
+                  ) : null}
                 </div>
               </div>
-            )}
-            {teaCatalog.length > 0 && (
-              <div>
-                <div className="text-xs text-white/40 mb-2">
-                  茶 · {teaCatalog.length} 条
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {teaCatalog.map((e, i) => (
-                    <CatalogCard
-                      key={e.id ?? e.table_id ?? i}
-                      e={e}
-                      onClick={e.id ? () => openDetail(e.id!) : undefined}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
 
-      {/* 配方校验 */}
-      <section>
-        <h2 className="text-base font-medium mb-3">配方校验</h2>
-        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="flex gap-3">
-            <input
-              value={validatePath}
-              onChange={(e) => setValidatePath(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doValidate()}
-              placeholder="本地配方文件路径，如 assets/hot-template.yaml"
-              className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm placeholder:text-white/30 focus:outline-none focus:border-white/30"
-            />
-            <button
-              onClick={doValidate}
-              disabled={busy}
-              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm font-medium disabled:opacity-50"
-            >
-              {busy ? "校验中…" : "校验"}
-            </button>
-          </div>
-          {result && (
-            <div className="mt-4">
-              {result.valid ? (
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-                  校验通过
-                  {result.summary && (
-                    <pre className="mt-2 text-xs text-emerald-200/70 overflow-auto">
-                      {JSON.stringify(result.summary, null, 2)}
-                    </pre>
+              {editing && editContent ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-ink">
+                      Edit latest (new revision)
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {validating ? (
+                        <span className="text-xs text-ink-faint">Validating...</span>
+                      ) : validationMatchesCurrent ? (
+                        <StatusPill tone="green">Valid</StatusPill>
+                      ) : validateState &&
+                        !validateState.valid &&
+                        validatedForId === editContentId ? (
+                        <StatusPill tone="red">Invalid</StatusPill>
+                      ) : (
+                        <StatusPill tone="amber">Pending</StatusPill>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-ink-faint">
+                    Parent {shortId(editParentId || "", 14)}
+                  </p>
+                  {reviewBeforeSave ? (
+                    <Alert tone="blue" title="Review before save">
+                      Parent updated to the newest revision. Review your edits,
+                      then save.
+                    </Alert>
+                  ) : null}
+                  {isTeaContent(editContent) ? (
+                    <TeaEditor
+                      value={editContent}
+                      onChange={onEditChange}
+                      disabled={saveBusy}
+                    />
+                  ) : isCoffeeContent(editContent) ? (
+                    <CoffeeEditor
+                      value={editContent}
+                      onChange={onEditChange}
+                      disabled={saveBusy}
+                    />
+                  ) : (
+                    <Alert tone="amber">Unsupported recipe shape for editing.</Alert>
                   )}
+                  {validateState &&
+                  !validateState.valid &&
+                  validatedForId === editContentId ? (
+                    <Alert tone="red" title="Validation">
+                      {validateState.error.message}
+                    </Alert>
+                  ) : null}
+                  {saveError ? (
+                    <Alert
+                      tone={staleParent ? "amber" : "red"}
+                      title={staleParent ? "Newer revision exists" : "Save failed"}
+                    >
+                      {saveError}
+                    </Alert>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="primary"
+                      disabled={!canSave}
+                      onClick={() => void saveRevision()}
+                    >
+                      <Save className="h-3.5 w-3.5" aria-hidden />
+                      {saveBusy ? "Saving..." : "Save new revision"}
+                    </Button>
+                    {staleParent ? (
+                      <Button
+                        variant="secondary"
+                        disabled={saveBusy}
+                        onClick={() =>
+                          void refreshStaleParent(detailRecipe.recipe_id)
+                        }
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                        Refresh parent
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="ghost"
+                      disabled={saveBusy}
+                      onClick={cancelEdit}
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : latest ? (
+                <div className="rounded-lg border border-line bg-paper p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-ink">
+                        Latest revision #{latest.revision_number}
+                      </div>
+                      <div className="text-xs text-ink-faint">
+                        {shortId(latest.revision_id, 16)}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={startEdit}>
+                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="success"
+                        onClick={() => startBrew(latest, detailRecipe.name)}
+                      >
+                        <Play className="h-3.5 w-3.5" aria-hidden />
+                        Brew latest
+                      </Button>
+                    </div>
+                  </div>
+                  <RecipeSummary content={latest.content} />
                 </div>
               ) : (
-                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-                  校验失败：{result.error}
-                  {result.type && (
-                    <span className="block text-xs text-red-300/60 mt-1">
-                      {result.type}
-                    </span>
+                <Alert tone="amber">No latest revision on this recipe.</Alert>
+              )}
+
+              {!editing ? (
+                <div>
+                  <h4 className="mb-2 text-sm font-medium text-ink">
+                    Revision timeline
+                  </h4>
+                  {revisions.length === 0 ? (
+                    <p className="text-sm text-ink-muted">No revisions.</p>
+                  ) : (
+                    <ol className="space-y-2">
+                      {[...revisions].reverse().map((rev) => (
+                        <li
+                          key={rev.revision_id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2"
+                        >
+                          <div className="min-w-0 text-sm">
+                            <span className="font-medium text-ink">
+                              #{rev.revision_number}
+                            </span>{" "}
+                            <span className="text-ink-muted">
+                              {shortId(rev.revision_id, 12)}
+                            </span>
+                            {rev.created_at ? (
+                              <span className="block text-xs text-ink-faint">
+                                {new Date(rev.created_at).toLocaleString()}
+                              </span>
+                            ) : null}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              startBrew(rev, detailRecipe.name)
+                            }
+                          >
+                            Brew
+                          </Button>
+                        </li>
+                      ))}
+                    </ol>
                   )}
                 </div>
-              )}
+              ) : null}
             </div>
+          ) : (
+            <p className="text-sm text-ink-muted">Recipe not found.</p>
           )}
-        </div>
-      </section>
+        </Panel>
+      </div>
 
-      {(detail || detailLoading) && (
-        <RecipeDetailModal
-          detail={detail}
-          loading={detailLoading}
-          onClose={() => {
-            setDetail(null);
-            setDetailLoading(false);
-          }}
-        />
-      )}
+      <BrewConfirmDialog
+        open={!!brewTarget}
+        target={brewTarget}
+        onClose={() => setBrewTarget(null)}
+        onStarted={() => {
+          setBrewTarget(null);
+          navigate("/");
+        }}
+      />
     </div>
   );
 }
 
-function TemplateCard({ t }: { t: Template }) {
+function RecipeSummary({ content }: { content: RecipeContent }) {
+  const kind = storageKindOf(content);
+  if (isTeaContent(content)) {
+    return (
+      <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-ink-muted">
+        <span>Leaf {content.leaf_g} g</span>
+        <span>Output {content.output_ml_per_steep} ml</span>
+        <span>Steeps {content.pours?.length ?? 0}</span>
+        <span>{kind}</span>
+      </div>
+    );
+  }
+  if (!isCoffeeContent(content)) {
+    return <div className="mt-2 text-xs text-ink-muted">{kind}</div>;
+  }
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 hover:bg-white/[0.04] transition-colors">
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-medium">{t.name || t.file}</div>
-        <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/5 text-white/50 shrink-0">
-          {t.kind}
-        </span>
-      </div>
-      <div className="mt-2 text-xs text-white/40 space-y-0.5">
-        {t.dose_g !== null && <div>粉量 {t.dose_g} g · {t.pours} 段注水</div>}
-        {t.leaf_g !== null && <div>叶量 {t.leaf_g} g · {t.pours} 段</div>}
-        {t.water_ml !== null && <div>水量 {t.water_ml} ml</div>}
-      </div>
-      <code className="block mt-2 text-[11px] text-white/30 truncate">{t.file}</code>
-    </div>
-  );
-}
-
-function CatalogCard({
-  e,
-  onClick,
-}: {
-  e: CatalogEntry;
-  onClick?: () => void;
-}) {
-  const origin = e.origin ?? "unknown";
-  const originLabel = ORIGIN_LABELS[origin] ?? origin;
-  const executable = !!e.executable;
-  const slotOk = !!e.slot_compatible;
-  const errors = (e.validation_errors as string[] | undefined) ?? [];
-  const reason = errors[0];
-
-  return (
-    <div
-      onClick={onClick}
-      className={`rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors ${
-        onClick ? "cursor-pointer hover:bg-white/[0.04]" : ""
-      }`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-sm font-medium truncate">{e.name ?? "—"}</div>
-        <div className="flex gap-1 shrink-0">
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/5 text-white/50">
-            {originLabel}
-          </span>
-        </div>
-      </div>
-      <div className="mt-2 flex items-center gap-2 text-xs">
-        {executable ? (
-          <span className="text-emerald-400">可执行</span>
-        ) : (
-          <span className="text-white/30">仅参考</span>
-        )}
-        {executable && (
-          <span className={slotOk ? "text-emerald-400/70" : "text-amber-400/70"}>
-            {slotOk ? "· 槽位兼容" : "· 槽位不兼容"}
-          </span>
-        )}
-        {e.cup_type && (
-          <span className="text-white/30">· {e.cup_type}</span>
-        )}
-      </div>
-      {!executable && reason && (
-        <div className="mt-1.5 text-[11px] text-white/30 line-clamp-2">
-          {reason}
-        </div>
-      )}
-      {e.author && (
-        <div className="mt-1.5 text-[11px] text-white/30">作者 {e.author}</div>
-      )}
+    <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-ink-muted">
+      <span>
+        {content.dose_g ?? "-"} g | grind {content.grind ?? "-"}
+      </span>
+      <span>{content.water_ml ?? "-"} ml water</span>
+      <span>{Array.isArray(content.pours) ? content.pours.length : 0} pours</span>
+      <span>{content.kind ?? kind}</span>
     </div>
   );
 }

@@ -1,7 +1,26 @@
 @import "tailwindcss";
 
+/*
+  Operational palette: neutral white / light-gray surfaces with distinct state accents.
+  No gradients. Card radius capped at 8px via rounded-lg utilities.
+*/
+
+@theme {
+  --color-paper: #f5f5f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #ececec;
+  --color-line: #d4d4d4;
+  --color-ink: #171717;
+  --color-ink-muted: #525252;
+  --color-ink-faint: #8a8a8a;
+  --color-accent-green: #1f7a4c;
+  --color-accent-amber: #a65f00;
+  --color-accent-red: #b42318;
+  --color-accent-blue: #1d5bbf;
+}
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
@@ -12,10 +31,150 @@ body,
 
 body {
   margin: 0;
-  background: #0b0d10;
-  color: #e7e9ea;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Focus-visible for native controls without custom classes */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent-blue) 70%, transparent);
+  outline-offset: 2px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Utility helpers mapped into Tailwind v4 theme tokens as plain CSS fallbacks */
+.bg-paper {
+  background-color: var(--color-paper);
+}
+.bg-surface {
+  background-color: var(--color-surface);
+}
+.bg-surface-2 {
+  background-color: var(--color-surface-2);
+}
+.border-line {
+  border-color: var(--color-line);
+}
+.text-ink {
+  color: var(--color-ink);
+}
+.text-ink-muted {
+  color: var(--color-ink-muted);
+}
+.text-ink-faint {
+  color: var(--color-ink-faint);
+}
+.text-paper {
+  color: var(--color-paper);
+}
+.text-accent-green {
+  color: var(--color-accent-green);
+}
+.text-accent-amber {
+  color: var(--color-accent-amber);
+}
+.text-accent-red {
+  color: var(--color-accent-red);
+}
+.text-accent-blue {
+  color: var(--color-accent-blue);
+}
+.bg-accent-green\/10 {
+  background-color: color-mix(in srgb, var(--color-accent-green) 10%, transparent);
+}
+.bg-accent-green\/12 {
+  background-color: color-mix(in srgb, var(--color-accent-green) 12%, transparent);
+}
+.bg-accent-green\/15 {
+  background-color: color-mix(in srgb, var(--color-accent-green) 15%, transparent);
+}
+.bg-accent-amber\/8 {
+  background-color: color-mix(in srgb, var(--color-accent-amber) 8%, transparent);
+}
+.bg-accent-amber\/12 {
+  background-color: color-mix(in srgb, var(--color-accent-amber) 12%, transparent);
+}
+.bg-accent-red\/8 {
+  background-color: color-mix(in srgb, var(--color-accent-red) 8%, transparent);
+}
+.bg-accent-red\/10 {
+  background-color: color-mix(in srgb, var(--color-accent-red) 10%, transparent);
+}
+.bg-accent-red\/12 {
+  background-color: color-mix(in srgb, var(--color-accent-red) 12%, transparent);
+}
+.bg-accent-red\/15 {
+  background-color: color-mix(in srgb, var(--color-accent-red) 15%, transparent);
+}
+.bg-accent-blue\/8 {
+  background-color: color-mix(in srgb, var(--color-accent-blue) 8%, transparent);
+}
+.bg-accent-blue\/12 {
+  background-color: color-mix(in srgb, var(--color-accent-blue) 12%, transparent);
+}
+.border-accent-green\/25 {
+  border-color: color-mix(in srgb, var(--color-accent-green) 25%, transparent);
+}
+.border-accent-green\/30 {
+  border-color: color-mix(in srgb, var(--color-accent-green) 30%, transparent);
+}
+.border-accent-amber\/25 {
+  border-color: color-mix(in srgb, var(--color-accent-amber) 25%, transparent);
+}
+.border-accent-red\/25 {
+  border-color: color-mix(in srgb, var(--color-accent-red) 25%, transparent);
+}
+.border-accent-red\/30 {
+  border-color: color-mix(in srgb, var(--color-accent-red) 30%, transparent);
+}
+.border-accent-blue\/25 {
+  border-color: color-mix(in srgb, var(--color-accent-blue) 25%, transparent);
+}
+.ring-accent-blue\/50 {
+  --tw-ring-color: color-mix(in srgb, var(--color-accent-blue) 50%, transparent);
+}
+.ring-accent-blue\/60 {
+  --tw-ring-color: color-mix(in srgb, var(--color-accent-blue) 60%, transparent);
+}
+.ring-offset-paper {
+  --tw-ring-offset-color: var(--color-paper);
+}
+.bg-ink {
+  background-color: var(--color-ink);
+}
+.bg-ink\/40 {
+  background-color: color-mix(in srgb, var(--color-ink) 40%, transparent);
+}
+.bg-ink\/90 {
+  background-color: color-mix(in srgb, var(--color-ink) 90%, transparent);
+}
+.hover\:bg-ink\/90:hover {
+  background-color: color-mix(in srgb, var(--color-ink) 90%, transparent);
+}
+.divide-line > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--color-line);
 }
