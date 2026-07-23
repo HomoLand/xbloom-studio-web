@@ -1,26 +1,33 @@
 @import "tailwindcss";
 
 /*
-  Operational palette: neutral white / light-gray surfaces with distinct state accents.
-  No gradients. Card radius capped at 8px via rounded-lg utilities.
+  xBloom official-app aligned visual system (App Store screenshots 2024–25).
+  Dark OLED surfaces, soft cards, white primary CTAs, warm brand accent.
 */
 
 @theme {
-  --color-paper: #f5f5f5;
-  --color-surface: #ffffff;
-  --color-surface-2: #ececec;
-  --color-line: #d4d4d4;
-  --color-ink: #171717;
-  --color-ink-muted: #525252;
-  --color-ink-faint: #8a8a8a;
-  --color-accent-green: #1f7a4c;
-  --color-accent-amber: #a65f00;
-  --color-accent-red: #b42318;
-  --color-accent-blue: #1d5bbf;
+  --color-paper: #0b0b0c;
+  --color-surface: #141416;
+  --color-surface-2: #1e1e22;
+  --color-surface-3: #2a2a30;
+  --color-line: #2f2f36;
+  --color-ink: #f4f4f5;
+  --color-ink-muted: #a1a1aa;
+  --color-ink-faint: #71717a;
+  --color-brand: #f5a623;
+  --color-brand-soft: #ffc66d;
+  --color-accent-green: #34d399;
+  --color-accent-amber: #f5a623;
+  --color-accent-red: #f87171;
+  --color-accent-blue: #60a5fa;
+  --color-chart-water: #3b82f6;
+  --color-chart-coffee: #e8a06a;
+  --radius-card: 1rem;
+  --radius-pill: 9999px;
 }
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 html,
@@ -37,6 +44,7 @@ body {
     ui-sans-serif,
     system-ui,
     -apple-system,
+    "SF Pro Text",
     "Segoe UI",
     Roboto,
     "Helvetica Neue",
@@ -46,15 +54,27 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  letter-spacing: -0.01em;
 }
 
-/* Focus-visible for native controls without custom classes */
+/* Subtle radial glow behind main content (product feel) */
+body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(245, 166, 35, 0.08), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(96, 165, 250, 0.04), transparent 50%),
+    var(--color-paper);
+}
+
 :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent-blue) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--color-brand) 70%, transparent);
   outline-offset: 2px;
 }
 
-/* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -66,7 +86,7 @@ body {
   }
 }
 
-/* Utility helpers mapped into Tailwind v4 theme tokens as plain CSS fallbacks */
+/* Utility helpers (Tailwind v4 theme + plain CSS fallbacks) */
 .bg-paper {
   background-color: var(--color-paper);
 }
@@ -75,6 +95,9 @@ body {
 }
 .bg-surface-2 {
   background-color: var(--color-surface-2);
+}
+.bg-surface-3 {
+  background-color: var(--color-surface-3);
 }
 .border-line {
   border-color: var(--color-line);
@@ -91,6 +114,9 @@ body {
 .text-paper {
   color: var(--color-paper);
 }
+.text-brand {
+  color: var(--color-brand);
+}
 .text-accent-green {
   color: var(--color-accent-green);
 }
@@ -102,6 +128,15 @@ body {
 }
 .text-accent-blue {
   color: var(--color-accent-blue);
+}
+.bg-brand {
+  background-color: var(--color-brand);
+}
+.bg-brand\/10 {
+  background-color: color-mix(in srgb, var(--color-brand) 10%, transparent);
+}
+.bg-brand\/15 {
+  background-color: color-mix(in srgb, var(--color-brand) 15%, transparent);
 }
 .bg-accent-green\/10 {
   background-color: color-mix(in srgb, var(--color-accent-green) 10%, transparent);
@@ -154,11 +189,14 @@ body {
 .border-accent-blue\/25 {
   border-color: color-mix(in srgb, var(--color-accent-blue) 25%, transparent);
 }
+.border-brand\/30 {
+  border-color: color-mix(in srgb, var(--color-brand) 30%, transparent);
+}
 .ring-accent-blue\/50 {
-  --tw-ring-color: color-mix(in srgb, var(--color-accent-blue) 50%, transparent);
+  --tw-ring-color: color-mix(in srgb, var(--color-brand) 50%, transparent);
 }
 .ring-accent-blue\/60 {
-  --tw-ring-color: color-mix(in srgb, var(--color-accent-blue) 60%, transparent);
+  --tw-ring-color: color-mix(in srgb, var(--color-brand) 60%, transparent);
 }
 .ring-offset-paper {
   --tw-ring-offset-color: var(--color-paper);
@@ -167,7 +205,7 @@ body {
   background-color: var(--color-ink);
 }
 .bg-ink\/40 {
-  background-color: color-mix(in srgb, var(--color-ink) 40%, transparent);
+  background-color: color-mix(in srgb, #000 55%, transparent);
 }
 .bg-ink\/90 {
   background-color: color-mix(in srgb, var(--color-ink) 90%, transparent);
@@ -177,4 +215,44 @@ body {
 }
 .divide-line > :not([hidden]) ~ :not([hidden]) {
   border-color: var(--color-line);
+}
+
+/* Official-style LED / matrix readout */
+.font-matrix {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+/* Soft pastel recipe swatches (official app thumbnails) */
+.recipe-swatch-0 {
+  background: #c8d4e8;
+  color: #1a1a1e;
+}
+.recipe-swatch-1 {
+  background: #e8d5c4;
+  color: #1a1a1e;
+}
+.recipe-swatch-2 {
+  background: #e8c8d0;
+  color: #1a1a1e;
+}
+.recipe-swatch-3 {
+  background: #d4c8e8;
+  color: #1a1a1e;
+}
+.recipe-swatch-4 {
+  background: #d0e4d4;
+  color: #1a1a1e;
+}
+.recipe-swatch-5 {
+  background: #e8e0b8;
+  color: #1a1a1e;
+}
+
+/* Scrollbar (dark) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-surface-3) transparent;
 }

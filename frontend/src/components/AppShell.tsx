@@ -28,10 +28,12 @@ export function AppShell() {
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
-      <aside className="hidden w-52 shrink-0 flex-col border-r border-line bg-surface md:flex">
-        <div className="border-b border-line px-4 py-3">
-          <div className="text-sm font-semibold text-ink">{t("app.name")}</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-faint">
+      <aside className="hidden w-56 shrink-0 flex-col border-r border-line bg-surface/80 backdrop-blur-md md:flex">
+        <div className="border-b border-line px-4 py-4">
+          <div className="text-[15px] font-semibold tracking-tight text-ink">
+            {t("app.name")}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-faint">
             {mode ? (
               <StatusPill tone={mode === "lan" ? "blue" : "neutral"}>
                 {mode}
@@ -44,21 +46,21 @@ export function AppShell() {
             </StatusPill>
           </div>
           {driver === "web-bluetooth" ? (
-            <div className="mt-1 text-[11px] leading-snug text-ink-muted">
-              {bleSnapshot.phase}
+            <div className="mt-2 rounded-xl bg-surface-2 px-2.5 py-2 text-[11px] leading-snug text-ink-muted">
+              <span className="text-brand">{bleSnapshot.phase}</span>
               {bleSnapshot.machineStateName
                 ? ` · ${bleSnapshot.machineStateName}`
                 : ""}
               {bleSnapshot.cupWeightG != null
-                ? ` · cup ${bleSnapshot.cupWeightG}g`
+                ? ` · ${bleSnapshot.cupWeightG}g`
                 : ""}
               {bleSnapshot.dispensedWaterMl != null
-                ? ` · H2O ${bleSnapshot.dispensedWaterMl}ml`
+                ? ` · ${bleSnapshot.dispensedWaterMl}ml`
                 : ""}
             </div>
           ) : null}
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5 p-2" aria-label="Main">
+        <nav className="flex flex-1 flex-col gap-0.5 p-2.5" aria-label="Main">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
@@ -66,20 +68,26 @@ export function AppShell() {
               end={item.end}
               className={({ isActive }) =>
                 cx(
-                  "flex items-center gap-2 rounded-md px-2.5 py-2 text-sm transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50",
+                  "flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
                   isActive
-                    ? "bg-surface-2 font-medium text-ink"
-                    : "text-ink-muted hover:bg-surface-2/70 hover:text-ink",
+                    ? "bg-surface-2 font-medium text-ink shadow-[inset_0_0_0_1px_var(--color-line)]"
+                    : "text-ink-muted hover:bg-surface-2/60 hover:text-ink",
                 )
               }
             >
-              <item.icon className="h-4 w-4 shrink-0 opacity-80" aria-hidden />
+              <item.icon
+                className={cx(
+                  "h-4 w-4 shrink-0",
+                  "opacity-80",
+                )}
+                aria-hidden
+              />
               {item.label}
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-line px-3 py-2.5 text-[11px] leading-relaxed text-ink-faint">
+        <div className="border-t border-line px-3.5 py-3 text-[11px] leading-relaxed text-ink-faint">
           {session?.client_label ? (
             <div className="truncate text-ink-muted">{session.client_label}</div>
           ) : null}
@@ -90,24 +98,26 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-line bg-surface px-4 py-2.5 md:hidden">
+        <div className="flex items-center justify-between border-b border-line bg-surface/90 px-4 py-3 backdrop-blur-md md:hidden">
           <div>
-            <div className="text-sm font-semibold text-ink">{t("app.name")}</div>
+            <div className="text-[15px] font-semibold tracking-tight text-ink">
+              {t("app.name")}
+            </div>
             <div className="text-[11px] text-ink-faint">
               {mode ?? "-"}
-              {session?.client_label ? ` | ${session.client_label}` : ""}
+              {session?.client_label ? ` · ${session.client_label}` : ""}
             </div>
           </div>
         </div>
 
         <main className="min-h-0 flex-1 overflow-auto">
-          <div className="mx-auto max-w-5xl px-4 py-5 pb-24 md:px-6 md:pb-6">
+          <div className="mx-auto max-w-5xl px-4 py-6 pb-28 md:px-6 md:pb-8">
             <Outlet />
           </div>
         </main>
 
         <nav
-          className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur-sm md:hidden"
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/90 backdrop-blur-xl md:hidden"
           aria-label="Main"
           style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
         >
@@ -119,14 +129,14 @@ export function AppShell() {
                 end={item.end}
                 className={({ isActive }) =>
                   cx(
-                    "flex flex-col items-center gap-0.5 px-1 py-2 text-[10px] font-medium",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-blue/50",
-                    isActive ? "text-ink" : "text-ink-muted",
+                    "flex flex-col items-center gap-0.5 px-0.5 py-2 text-[9px] font-medium",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/40",
+                    isActive ? "text-brand" : "text-ink-muted",
                   )
                 }
               >
                 <item.icon className="h-5 w-5" aria-hidden />
-                {item.label}
+                <span className="truncate max-w-full">{item.label}</span>
               </NavLink>
             ))}
           </div>

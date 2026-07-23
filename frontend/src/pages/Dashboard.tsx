@@ -34,6 +34,7 @@ import {
   Alert,
   Button,
   IconButton,
+  MatrixReadout,
   PageHeader,
   Panel,
   Spinner,
@@ -703,26 +704,28 @@ export default function Dashboard() {
         }
       />
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <Link
           to="/design"
-          className="rounded-lg border border-line bg-surface p-4 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
+          className="rounded-2xl border border-line bg-surface p-4 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
         >
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
-            <Sparkles className="h-4 w-4 text-accent-blue" aria-hidden />
+            <Sparkles className="h-4 w-4 text-brand" aria-hidden />
             {t("dashboard.design")}
           </div>
-          <p className="mt-1 text-xs text-ink-muted">{t("dashboard.designHint")}</p>
+          <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
+            {t("dashboard.designHint")}
+          </p>
         </Link>
         <Link
           to="/recipes"
-          className="rounded-lg border border-line bg-surface p-4 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
+          className="rounded-2xl border border-line bg-surface p-4 transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
         >
           <div className="flex items-center gap-2 text-sm font-medium text-ink">
-            <Beaker className="h-4 w-4 text-accent-green" aria-hidden />
+            <Beaker className="h-4 w-4 text-accent-blue" aria-hidden />
             {t("dashboard.recipes")}
           </div>
-          <p className="mt-1 text-xs text-ink-muted">
+          <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
             {t("dashboard.recipesHint")}
           </p>
         </Link>
@@ -730,7 +733,7 @@ export default function Dashboard() {
 
       {webBle ? (
         <Panel title={t("dashboard.webBle")} className="mb-4">
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="flex flex-wrap gap-1.5">
               <StatusPill
                 tone={
@@ -754,36 +757,47 @@ export default function Dashboard() {
                 <StatusPill tone="amber">recipe loaded</StatusPill>
               ) : null}
             </div>
-            <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <FieldRow
-                label={t("dashboard.device")}
-                value={
-                  bleSnapshot.deviceName ||
-                  bleSnapshot.deviceId ||
-                  t("dashboard.notConnected")
-                }
-              />
-              <FieldRow
-                label={t("dashboard.phase")}
-                value={bleSnapshot.machineStateName ?? bleSnapshot.phase}
-              />
-              <FieldRow
-                label={t("dashboard.cup")}
-                value={
-                  bleSnapshot.cupWeightG != null
-                    ? `${bleSnapshot.cupWeightG} g`
-                    : "-"
-                }
-              />
-              <FieldRow
-                label={t("dashboard.water")}
-                value={
-                  bleSnapshot.dispensedWaterMl != null
-                    ? `${bleSnapshot.dispensedWaterMl} ml`
-                    : "-"
-                }
-              />
-            </dl>
+
+            {/* Live View–style machine hero + matrix readouts */}
+            <div className="overflow-hidden rounded-2xl bg-surface-2">
+              <div className="flex flex-col items-center px-4 pb-2 pt-6">
+                <img
+                  src={`${import.meta.env.BASE_URL}studio-machine.png`}
+                  alt=""
+                  className="h-36 w-auto opacity-95 drop-shadow-[0_16px_40px_rgba(0,0,0,0.55)] sm:h-44"
+                  draggable={false}
+                />
+                <div className="mt-3 text-center">
+                  <div className="text-sm font-semibold tracking-tight text-ink">
+                    {bleSnapshot.deviceName || "xBloom [Studio]"}
+                  </div>
+                  <div className="mt-0.5 text-xs text-ink-faint">
+                    {bleSnapshot.machineStateName ?? bleSnapshot.phase}
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 border-t border-line px-4 py-5">
+                <MatrixReadout
+                  label={t("dashboard.cup")}
+                  value={
+                    bleSnapshot.cupWeightG != null
+                      ? bleSnapshot.cupWeightG.toFixed(1)
+                      : "—"
+                  }
+                  unit={bleSnapshot.cupWeightG != null ? "g" : undefined}
+                />
+                <MatrixReadout
+                  label={t("dashboard.water")}
+                  value={
+                    bleSnapshot.dispensedWaterMl != null
+                      ? String(Math.round(bleSnapshot.dispensedWaterMl))
+                      : "—"
+                  }
+                  unit={bleSnapshot.dispensedWaterMl != null ? "ml" : undefined}
+                />
+              </div>
+            </div>
+
             <div className="flex flex-wrap gap-2">
               {bleSnapshot.phase === "connecting" ? (
                 <Button
@@ -834,7 +848,7 @@ export default function Dashboard() {
                 </Button>
               )}
               <Button
-                variant="success"
+                variant="brand"
                 size="sm"
                 disabled={actionBusy !== null}
                 onClick={() => {

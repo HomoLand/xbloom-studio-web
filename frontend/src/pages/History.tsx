@@ -89,7 +89,7 @@ export default function History() {
         {t("history.localMode")}
       </Alert>
 
-      <div className="mb-4 grid grid-cols-3 gap-3">
+      <div className="mb-5 grid grid-cols-3 gap-3">
         <Stat label={t("history.total")} value={status.total} />
         <Stat
           label={t("history.completed")}
@@ -112,16 +112,16 @@ export default function History() {
               description={t("history.emptyHint")}
             />
           ) : (
-            <ul className="divide-y divide-line">
+            <ul className="space-y-1">
               {events.map((e) => {
                 const active = e.event_id === selectedId;
                 return (
                   <li key={e.event_id}>
                     <button
                       type="button"
-                      className={`flex w-full flex-col gap-1 px-2 py-2.5 text-left transition-colors ${
+                      className={`flex w-full flex-col gap-1 rounded-2xl px-3 py-3 text-left transition-colors ${
                         active
-                          ? "bg-surface-2"
+                          ? "bg-surface-2 shadow-[inset_0_0_0_1px_var(--color-line)]"
                           : "hover:bg-surface-2/70"
                       }`}
                       onClick={() => setSelectedId(e.event_id)}
@@ -289,24 +289,21 @@ function TelemetrySpark({ samples }: { samples: TelemetrySample[] }) {
   return (
     <svg
       viewBox={`0 0 ${w} ${h}`}
-      className="w-full rounded-md border border-line bg-paper"
+      className="w-full rounded-xl border border-line bg-surface-2"
       role="img"
       aria-label="Telemetry chart"
     >
       <path
         d={pathFor(water, wMax)}
         fill="none"
-        stroke="currentColor"
-        className="text-accent-blue"
-        strokeWidth="1.5"
+        stroke="var(--color-chart-water)"
+        strokeWidth="1.75"
       />
       <path
         d={pathFor(cup, cMax)}
         fill="none"
-        stroke="currentColor"
-        className="text-accent-green opacity-80"
-        strokeWidth="1.25"
-        strokeDasharray="3 2"
+        stroke="var(--color-chart-coffee)"
+        strokeWidth="1.5"
       />
     </svg>
   );
@@ -314,9 +311,9 @@ function TelemetrySpark({ samples }: { samples: TelemetrySample[] }) {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-line bg-surface p-3">
-      <div className="text-xl font-semibold tabular-nums text-ink">{value}</div>
-      <div className="text-xs text-ink-muted">{label}</div>
+    <div className="rounded-2xl border border-line bg-surface p-3.5">
+      <div className="font-matrix text-2xl text-ink">{value}</div>
+      <div className="mt-0.5 text-xs text-ink-muted">{label}</div>
     </div>
   );
 }

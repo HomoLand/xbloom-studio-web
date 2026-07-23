@@ -86,7 +86,7 @@ function UnauthenticatedGate({
           ? "This host requires pairing. Open a one-time pairing link from a trusted device."
           : "Authentication required."}
       </p>
-      <div className="mt-6 rounded-lg border border-line bg-surface p-4 text-sm text-ink-muted">
+      <div className="mt-6 rounded-2xl border border-line bg-surface p-4 text-sm leading-relaxed text-ink-muted">
         <p>
           Create a pairing link from Settings on a trusted machine, then open it
           on this device.

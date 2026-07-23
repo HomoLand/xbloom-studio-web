@@ -9,6 +9,7 @@ import {
   BrewConfirmDialog,
   type BrewTarget,
 } from "../components/BrewConfirmDialog";
+import { RecipeListItem } from "../components/RecipeListItem";
 import {
   Alert,
   Button,
@@ -17,6 +18,8 @@ import {
   IconButton,
   PageHeader,
   Panel,
+  RecipeThumb,
+  Select,
   Spinner,
   StatusPill,
   TextInput,
@@ -33,11 +36,7 @@ import {
   toRecipeRecord,
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
-import {
-  isCoffeeContent,
-  recipeDisplayName,
-  shortId,
-} from "../lib/recipeDomain";
+import { isCoffeeContent } from "../lib/recipeDomain";
 import {
   CLOUD_DELETE_CONFIRM,
   CLOUD_WRITE_CONFIRM,
@@ -324,8 +323,7 @@ export default function Recipes() {
             />
           </Field>
           <Field label={t("cloud.region")}>
-            <select
-              className="w-full rounded-md border border-line bg-paper px-2 py-1.5 text-sm text-ink"
+            <Select
               value={region}
               onChange={(e) =>
                 setRegion(
@@ -337,7 +335,7 @@ export default function Recipes() {
             >
               <option value="china">{t("cloud.regionCn")}</option>
               <option value="international">{t("cloud.regionIntl")}</option>
-            </select>
+            </Select>
           </Field>
           <div className="flex items-end">
             <Button
@@ -358,49 +356,44 @@ export default function Recipes() {
           {loading ? (
             <Spinner label={t("common.loading")} />
           ) : recipes.length === 0 ? (
-            <EmptyState title={t("recipes.empty")} />
+            <EmptyState title={t("recipes.empty")} showMachine={false} />
           ) : (
-            <ul className="divide-y divide-line">
-              {recipes.map((r) => {
+            <ul className="space-y-1">
+              {recipes.map((r, idx) => {
                 const active = r.recipe_id === selectedId;
                 const source = String(r.source ?? "");
+                const c = (r.latest_revision?.content ??
+                  getLocalRecipe(r.recipe_id)?.content) as RecipeContent | null;
                 return (
                   <li key={r.recipe_id}>
-                    <button
-                      type="button"
-                      className={`flex w-full items-center justify-between gap-2 px-2 py-2.5 text-left text-sm transition-colors ${
-                        active
-                          ? "bg-surface-2 font-medium text-ink"
-                          : "text-ink-muted hover:bg-surface-2/70 hover:text-ink"
-                      }`}
+                    <RecipeListItem
+                      name={r.name}
+                      content={c}
+                      index={idx}
+                      active={active}
                       onClick={() => openDetail(r.recipe_id)}
-                    >
-                      <span className="min-w-0 truncate">
-                        {r.name ||
-                          recipeDisplayName(
-                            r.latest_revision?.content as RecipeContent,
-                          )}
-                      </span>
-                      <StatusPill
-                        tone={
-                          source === "official"
-                            ? "blue"
+                      badge={
+                        <StatusPill
+                          tone={
+                            source === "official"
+                              ? "blue"
+                              : source === "design"
+                                ? "green"
+                                : source === "cloud"
+                                  ? "amber"
+                                  : "neutral"
+                          }
+                        >
+                          {source === "official"
+                            ? t("recipes.official")
                             : source === "design"
-                              ? "green"
+                              ? t("recipes.design")
                               : source === "cloud"
-                                ? "amber"
-                                : "neutral"
-                        }
-                      >
-                        {source === "official"
-                          ? t("recipes.official")
-                          : source === "design"
-                            ? t("recipes.design")
-                            : source === "cloud"
-                              ? t("recipes.cloud")
-                              : t("recipes.user")}
-                      </StatusPill>
-                    </button>
+                                ? t("recipes.cloud")
+                                : t("recipes.user")}
+                        </StatusPill>
+                      }
+                    />
                   </li>
                 );
               })}
@@ -414,62 +407,101 @@ export default function Recipes() {
               {selectedId ? t("common.loading") : t("recipes.selectHint")}
             </p>
           ) : (
-            <div className="space-y-3 text-sm">
-              <dl className="grid gap-1 sm:grid-cols-2 text-ink-muted">
-                <div>
-                  {t("recipes.kind")}{" "}
-                  <span className="text-ink">{detail.kind}</span>
-                </div>
-                <div>
-                  {t("common.id")}{" "}
-                  <code className="text-ink">
-                    {shortId(detail.recipe_id, 14)}
-                  </code>
-                </div>
-                {localEntry?.table_id ? (
-                  <div>
-                    tableId{" "}
-                    <span className="text-ink">{localEntry.table_id}</span>
+            <div className="space-y-4 text-sm">
+              <div className="flex items-start gap-3">
+                <RecipeThumb
+                  label={
+                    isCoffeeContent(content)
+                      ? /xpod/i.test(String(content.dripper || ""))
+                        ? "xPod"
+                        : "Omni"
+                      : "Tea"
+                  }
+                  pours={
+                    isCoffeeContent(content)
+                      ? content.pours.length
+                      : (content as { pours?: unknown[] }).pours?.length
+                  }
+                  index={Math.abs(
+                    detail.recipe_id.split("").reduce((a, c) => a + c.charCodeAt(0), 0),
+                  )}
+                  className="h-16 w-16"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-lg font-semibold tracking-tight text-ink">
+                    {detail.name}
                   </div>
-                ) : null}
+                  <div className="mt-1 text-xs text-ink-faint">
+                    {detail.kind}
+                    {localEntry?.table_id
+                      ? ` · tableId ${localEntry.table_id}`
+                      : ""}
+                  </div>
+                </div>
+              </div>
+              <dl className="grid gap-2 rounded-2xl bg-surface-2 p-3 sm:grid-cols-3 text-ink-muted">
                 {isCoffeeContent(content) ? (
                   <>
                     <div>
-                      {t("recipes.dose")} {content.dose_g} g
+                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
+                        {t("recipes.dose")}
+                      </div>
+                      <div className="mt-0.5 text-base font-medium text-ink">
+                        {content.dose_g} g
+                      </div>
                     </div>
                     <div>
-                      {t("recipes.grind")} {content.grind}
+                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
+                        {t("recipes.grind")}
+                      </div>
+                      <div className="mt-0.5 text-base font-medium text-ink">
+                        {content.grind}
+                      </div>
                     </div>
                     <div>
-                      {t("recipes.water")} {content.water_ml} ml
-                    </div>
-                    <div>
-                      {t("recipes.pours")} {content.pours.length}
+                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
+                        {t("recipes.water")}
+                      </div>
+                      <div className="mt-0.5 text-base font-medium text-ink">
+                        {content.water_ml} ml
+                      </div>
                     </div>
                   </>
                 ) : (
-                  <div className="sm:col-span-2">{t("recipes.teaOnly")}</div>
+                  <div className="sm:col-span-3">{t("recipes.teaOnly")}</div>
                 )}
               </dl>
               {isCoffeeContent(content) && content.note ? (
                 <p className="text-xs text-ink-muted">{content.note}</p>
               ) : null}
               {isCoffeeContent(content) ? (
-                <ol className="space-y-1 text-xs">
-                  {content.pours.map((p, i) => (
-                    <li
-                      key={i}
-                      className="rounded-md border border-line bg-paper px-2 py-1.5"
-                    >
-                      {i + 1}. {p.label || `Pour ${i + 1}`}: {p.ml} ml @{" "}
-                      {String(p.temp_c)}° · {p.pattern}
-                    </li>
-                  ))}
-                </ol>
+                <div>
+                  <div className="mb-2 text-xs font-medium text-ink-muted">
+                    {t("recipes.pours")}
+                  </div>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {content.pours.map((p, i) => (
+                      <div
+                        key={i}
+                        className="flex flex-col items-center rounded-xl bg-surface-2 px-1 py-2 text-center"
+                      >
+                        <span className="text-sm font-semibold text-ink">
+                          {p.ml}ml
+                        </span>
+                        <span className="mt-1 text-[10px] text-ink-faint">
+                          {String(p.temp_c)}°
+                        </span>
+                        <span className="mt-0.5 truncate text-[10px] text-ink-muted">
+                          {p.label || `P${i + 1}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ) : null}
               <div className="flex flex-wrap gap-2 pt-1">
                 <Button
-                  variant="success"
+                  variant="primary"
                   size="sm"
                   disabled={!canBrewWebBle}
                   onClick={() =>

@@ -24,14 +24,20 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-lg font-semibold text-ink">{title}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-[1.65rem]">
+          {title}
+        </h1>
         {description ? (
-          <p className="mt-0.5 text-sm text-ink-muted">{description}</p>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-muted">
+            {description}
+          </p>
         ) : null}
       </div>
-      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex flex-wrap items-center gap-2">{actions}</div>
+      ) : null}
     </header>
   );
 }
@@ -48,10 +54,19 @@ export function Panel({
   action?: ReactNode;
 }) {
   return (
-    <section className={cx("rounded-lg border border-line bg-surface p-4", className)}>
+    <section
+      className={cx(
+        "rounded-2xl border border-line bg-surface p-4 shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
+        className,
+      )}
+    >
       {(title || action) && (
         <div className="mb-3 flex items-center justify-between gap-2">
-          {title ? <h2 className="text-sm font-medium text-ink">{title}</h2> : <span />}
+          {title ? (
+            <h2 className="text-sm font-medium tracking-tight text-ink">{title}</h2>
+          ) : (
+            <span />
+          )}
           {action}
         </div>
       )}
@@ -66,22 +81,27 @@ export function Button({
   className,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "danger" | "ghost" | "success";
+  variant?: "primary" | "secondary" | "danger" | "ghost" | "success" | "brand";
   size?: "sm" | "md" | "icon";
 }) {
   return (
     <button
       type="button"
       className={cx(
-        "inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
-        "disabled:pointer-events-none disabled:opacity-45",
-        size === "sm" && "h-8 px-2.5 text-xs",
-        size === "md" && "h-9 px-3 text-sm",
+        "inline-flex items-center justify-center gap-1.5 font-medium transition-colors",
+        "rounded-full",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+        "disabled:pointer-events-none disabled:opacity-40",
+        size === "sm" && "h-8 px-3 text-xs",
+        size === "md" && "h-9 px-4 text-sm",
         size === "icon" && "h-9 w-9 p-0",
-        variant === "primary" && "bg-ink text-paper hover:bg-ink/90",
+        /* Official primary: white pill on dark */
+        variant === "primary" &&
+          "bg-ink text-paper hover:bg-white/90 active:bg-white/80",
+        variant === "brand" &&
+          "bg-brand text-paper hover:brightness-110 active:brightness-95",
         variant === "secondary" &&
-          "border border-line bg-surface text-ink hover:bg-surface-2",
+          "border border-line bg-surface-2 text-ink hover:bg-surface-3",
         variant === "danger" &&
           "border border-accent-red/30 bg-accent-red/10 text-accent-red hover:bg-accent-red/15",
         variant === "success" &&
@@ -122,20 +142,15 @@ export function Field({
 }
 
 const controlBase =
-  "w-full rounded-md border border-line bg-paper px-2.5 text-sm text-ink placeholder:text-ink-faint " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50 focus-visible:border-accent-blue/40 " +
+  "w-full rounded-xl border border-line bg-surface-2 px-3 text-sm text-ink placeholder:text-ink-faint " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:border-brand/40 " +
   "disabled:opacity-50";
 
 export function TextInput({
   className,
   ...props
 }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      className={cx(controlBase, "h-9", className)}
-      {...props}
-    />
-  );
+  return <input className={cx(controlBase, "h-10", className)} {...props} />;
 }
 
 export function TextArea({
@@ -144,7 +159,7 @@ export function TextArea({
 }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={cx(controlBase, "min-h-[88px] py-2 resize-y", className)}
+      className={cx(controlBase, "min-h-[96px] resize-y py-2.5", className)}
       {...props}
     />
   );
@@ -156,7 +171,7 @@ export function Select({
   ...props
 }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select className={cx(controlBase, "h-9", className)} {...props}>
+    <select className={cx(controlBase, "h-10", className)} {...props}>
       {children}
     </select>
   );
@@ -177,7 +192,7 @@ export function Segmented<T extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex flex-wrap rounded-md border border-line bg-surface-2 p-0.5"
+      className="inline-flex flex-wrap rounded-full border border-line bg-surface-2 p-0.5"
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -188,10 +203,10 @@ export function Segmented<T extends string>({
             aria-pressed={active}
             onClick={() => onChange(opt.value)}
             className={cx(
-              "h-8 rounded-[5px] px-3 text-xs font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50",
+              "h-8 rounded-full px-3.5 text-xs font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
               active
-                ? "bg-surface text-ink shadow-sm"
+                ? "bg-ink text-paper shadow-sm"
                 : "text-ink-muted hover:text-ink",
             )}
           >
@@ -213,8 +228,8 @@ export function StatusPill({
   return (
     <span
       className={cx(
-        "inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-        tone === "neutral" && "bg-surface-2 text-ink-muted",
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        tone === "neutral" && "bg-surface-3 text-ink-muted",
         tone === "green" && "bg-accent-green/12 text-accent-green",
         tone === "amber" && "bg-accent-amber/12 text-accent-amber",
         tone === "red" && "bg-accent-red/12 text-accent-red",
@@ -241,11 +256,14 @@ export function Alert({
     <div
       role="alert"
       className={cx(
-        "rounded-lg border px-3 py-2.5 text-sm",
+        "rounded-2xl border px-3.5 py-3 text-sm",
         tone === "red" && "border-accent-red/25 bg-accent-red/8 text-accent-red",
-        tone === "amber" && "border-accent-amber/25 bg-accent-amber/8 text-accent-amber",
-        tone === "green" && "border-accent-green/25 bg-accent-green/8 text-accent-green",
-        tone === "blue" && "border-accent-blue/25 bg-accent-blue/8 text-accent-blue",
+        tone === "amber" &&
+          "border-accent-amber/25 bg-accent-amber/8 text-accent-amber",
+        tone === "green" &&
+          "border-accent-green/25 bg-accent-green/8 text-accent-green",
+        tone === "blue" &&
+          "border-accent-blue/25 bg-accent-blue/8 text-accent-blue",
         className,
       )}
     >
@@ -299,7 +317,7 @@ export function Dialog({
       <button
         type="button"
         aria-label="Close dialog"
-        className="absolute inset-0 bg-ink/40"
+        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
         disabled={busy}
         onClick={() => {
           if (!busy) onClose();
@@ -312,14 +330,14 @@ export function Dialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cx(
-          "relative z-10 max-h-[min(90vh,720px)] w-full overflow-auto rounded-lg border border-line bg-surface shadow-lg",
+          "relative z-10 max-h-[min(90vh,720px)] w-full overflow-auto rounded-2xl border border-line bg-surface shadow-2xl shadow-black/50",
           "focus:outline-none",
           size === "md" && "max-w-lg",
           size === "lg" && "max-w-2xl",
         )}
       >
-        <div className="sticky top-0 flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-3">
-          <h2 id={titleId} className="text-sm font-semibold text-ink">
+        <div className="sticky top-0 flex items-center justify-between gap-3 border-b border-line bg-surface/95 px-4 py-3.5 backdrop-blur-sm">
+          <h2 id={titleId} className="text-base font-semibold tracking-tight text-ink">
             {title}
           </h2>
           <Button
@@ -351,20 +369,22 @@ export function EmptyState({
   showMachine?: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
+    <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
       {showMachine ? (
         <img
           src={`${import.meta.env.BASE_URL}studio-machine.png`}
           alt=""
-          className="mb-5 h-28 w-auto opacity-80 sm:h-36"
+          className="mb-6 h-32 w-auto opacity-90 drop-shadow-[0_12px_40px_rgba(0,0,0,0.45)] sm:h-40"
           draggable={false}
         />
       ) : null}
-      <h3 className="text-sm font-medium text-ink">{title}</h3>
+      <h3 className="text-base font-medium tracking-tight text-ink">{title}</h3>
       {description ? (
-        <p className="mt-1 max-w-sm text-sm text-ink-muted">{description}</p>
+        <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-ink-muted">
+          {description}
+        </p>
       ) : null}
-      {action ? <div className="mt-4">{action}</div> : null}
+      {action ? <div className="mt-5">{action}</div> : null}
     </div>
   );
 }
@@ -373,7 +393,7 @@ export function Spinner({ label = "Loading" }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 text-sm text-ink-muted" role="status">
       <span
-        className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-ink-muted motion-reduce:animate-none"
+        className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-brand motion-reduce:animate-none"
         aria-hidden
       />
       <span>{label}</span>
@@ -398,5 +418,67 @@ export function IconButton({
     >
       {children}
     </Button>
+  );
+}
+
+/** Soft pastel thumbnail like official Recipe Library cards. */
+export function RecipeThumb({
+  label,
+  pours,
+  index = 0,
+  className,
+}: {
+  label?: string;
+  pours?: number;
+  index?: number;
+  className?: string;
+}) {
+  const swatch = `recipe-swatch-${Math.abs(index) % 6}`;
+  return (
+    <div
+      className={cx(
+        "relative flex h-14 w-14 shrink-0 flex-col justify-between overflow-hidden rounded-xl p-1.5",
+        swatch,
+        className,
+      )}
+    >
+      {label ? (
+        <span className="truncate text-[9px] font-semibold uppercase tracking-wide opacity-80">
+          {label}
+        </span>
+      ) : (
+        <span />
+      )}
+      <span className="self-end text-2xl font-semibold leading-none tracking-tight opacity-90">
+        {pours != null && pours > 0 ? pours : "·"}
+      </span>
+    </div>
+  );
+}
+
+/** LED-style metric (Live View). */
+export function MatrixReadout({
+  value,
+  unit,
+  label,
+}: {
+  value: string;
+  unit?: string;
+  label?: string;
+}) {
+  return (
+    <div className="text-center">
+      {label ? (
+        <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-faint">
+          {label}
+        </div>
+      ) : null}
+      <div className="font-matrix text-3xl text-ink sm:text-4xl">
+        {value}
+        {unit ? (
+          <span className="ml-1 text-base font-normal text-ink-muted">{unit}</span>
+        ) : null}
+      </div>
+    </div>
   );
 }

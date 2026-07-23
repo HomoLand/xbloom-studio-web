@@ -464,7 +464,7 @@ export default function Settings() {
           ) : null}
           {pairing ? (
             <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
-              <div className="rounded-lg border border-line bg-paper p-3">
+              <div className="rounded-2xl border border-line bg-surface-2 p-3">
                 <QRCodeSVG
                   value={pairing.pairing_url}
                   size={148}
@@ -482,7 +482,7 @@ export default function Settings() {
                     TTL ~{config?.pairing_ttl_s ?? 300}s
                   </StatusPill>
                 </div>
-                <div className="break-all rounded-md border border-line bg-paper px-2.5 py-2 font-mono text-xs text-ink">
+                <div className="break-all rounded-xl border border-line bg-surface-2 px-2.5 py-2 font-mono text-xs text-ink">
                   {pairing.pairing_url}
                 </div>
                 <p className="text-xs text-ink-faint">
