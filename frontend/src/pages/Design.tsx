@@ -28,6 +28,7 @@ import {
   StatusPill,
   TextArea,
 } from "../components/ui";
+import { designErrorRecovery } from "../lib/apiErrors";
 import {
   cloneContent,
   contentIdentity,
@@ -694,24 +695,9 @@ function applyDesignError(
   setError: (s: string) => void,
   setRecovery: (s: string | null) => void,
 ): void {
+  // Shared C8 mapping; keep Design-specific configuration/image copy.
   if (e instanceof ApiError) {
     setError(e.message);
-    if (e.code === "timeout" || e.category === "timeout" || e.status === 504) {
-      setRecovery(
-        "Provider timed out. Retry with a smaller image or shorter notes, or increase design timeout on the host.",
-      );
-      return;
-    }
-    if (
-      e.code === "provider_error" ||
-      e.category === "provider" ||
-      e.status === 502
-    ) {
-      setRecovery(
-        "Upstream provider failed. Check API base URL/key on the host and retry once.",
-      );
-      return;
-    }
     if (
       e.code === "configuration_error" ||
       e.category === "configuration"
@@ -731,11 +717,7 @@ function applyDesignError(
       );
       return;
     }
-    if (e.code === "auth_required" || e.status === 401) {
-      setRecovery("Session expired. Re-pair this device from Settings.");
-      return;
-    }
-    setRecovery(null);
+    setRecovery(designErrorRecovery(e));
     return;
   }
   setError(e instanceof Error ? e.message : String(e));

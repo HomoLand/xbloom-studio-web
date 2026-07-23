@@ -1,11 +1,14 @@
 /**
  * Persist exact workflow IDs returned by load/start.
  * Never invent IDs. Only store values the server provided.
+ *
+ * Storage events are observable across tabs for UI refresh only - never
+ * trigger hardware mutations from storage changes.
  */
 
-const WORKFLOW_ID_KEY = "xbloom.workflow_id";
-const WORKFLOW_KIND_KEY = "xbloom.workflow_kind";
-const WORKFLOW_REVISION_KEY = "xbloom.workflow_revision_id";
+export const WORKFLOW_ID_KEY = "xbloom.workflow_id";
+export const WORKFLOW_KIND_KEY = "xbloom.workflow_kind";
+export const WORKFLOW_REVISION_KEY = "xbloom.workflow_revision_id";
 
 export type WorkflowKind = "coffee" | "tea";
 
@@ -53,4 +56,17 @@ export function clearStoredWorkflow(): void {
   localStorage.removeItem(WORKFLOW_ID_KEY);
   localStorage.removeItem(WORKFLOW_KIND_KEY);
   localStorage.removeItem(WORKFLOW_REVISION_KEY);
+}
+
+/**
+ * True when a storage event key relates to our workflow persistence.
+ * Listeners must only refresh local UI state - no load/start/stop/disconnect.
+ */
+export function isWorkflowStorageKey(key: string | null): boolean {
+  if (!key) return false;
+  return (
+    key === WORKFLOW_ID_KEY ||
+    key === WORKFLOW_KIND_KEY ||
+    key === WORKFLOW_REVISION_KEY
+  );
 }

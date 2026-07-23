@@ -203,11 +203,10 @@ def test_mcp_does_not_import_or_call_raw_bridge_call_or_manual_ensure():
 
 
 def test_frontend_explicit_workflow_and_cancel_no_generic_call():
-    """Phase C: typed client + brew confirmation; Dashboard is overview-only.
+    """Phase C5-C8: typed client, brew confirmation, Dashboard monitor.
 
-    Full event polling/recovery remains a later batch. Brew load/start uses
-    recipe_revision_id + exact workflow_id + one request_id per action in
-    BrewConfirmDialog (not path-based Dashboard load).
+    Dashboard polls status/events with exact workflow IDs, typed controls, and
+    reconcile — never generic RPC. Closing/unmounting never mutates hardware.
     """
 
     api_src = _read(REPO_ROOT / "frontend" / "src" / "api.ts")
@@ -215,6 +214,9 @@ def test_frontend_explicit_workflow_and_cancel_no_generic_call():
     brew_src = _read(
         REPO_ROOT / "frontend" / "src" / "components" / "BrewConfirmDialog.tsx"
     )
+    monitor_src = _read(REPO_ROOT / "frontend" / "src" / "lib" / "monitorLogic.ts")
+    errors_src = _read(REPO_ROOT / "frontend" / "src" / "lib" / "apiErrors.ts")
+    auth_src = _read(REPO_ROOT / "frontend" / "src" / "auth" / "AuthContext.tsx")
 
     assert "bridgeCall" not in api_src
     assert "bridgeCall" not in dash_src
@@ -226,13 +228,100 @@ def test_frontend_explicit_workflow_and_cancel_no_generic_call():
     # Load is revision-id only (no recipe path field on device load).
     assert "recipe_revision_id" in api_src
     assert re.search(r"coffeeLoad\([^)]*path", api_src) is None
+    # release_state is not part of the bridge contract.
+    assert "release_state" not in api_src or "release_state does not exist" in api_src
+    assert "release_pending" in api_src
+    assert "gap_detected" in api_src
+    assert "instance_id" in api_src
 
-    # Dashboard remains a bridge/workflow overview bridge for the next batch.
-    assert "workflowId" in dash_src or "workflow_id" in dash_src or "active_workflow" in dash_src
-    assert "active_workflow_id" in dash_src or "activeWorkflow" in dash_src
-    # No full event-poll loop on Dashboard in this batch.
-    assert "clearInterval(timer)" not in dash_src
-    assert "api.bridgeEvents" not in dash_src
+    # Dashboard: exact workflow tracking + event polling (C5).
+    assert "selectTrackedWorkflowId" in dash_src or "active_workflow_id" in dash_src
+    assert "api.bridgeEvents" in dash_src
+    assert "workflow_id" in dash_src or "trackedId" in dash_src
+    # Non-overlapping poll guards.
+    assert "statusInFlight" in dash_src or "InFlight" in dash_src
+    # Controls mint fresh request_id per click; reconcile never uses request_id.
+    assert "newRequestId" in dash_src
+    assert "recoveryReconcile" in dash_src
+    assert "api.pause" in dash_src
+    assert "api.resume" in dash_src
+    assert "api.stop" in dash_src
+    assert "api.cancel" in dash_src
+    # No generic RPC and no normal manual disconnect in workflow UI.
+    assert "bridgeCall" not in dash_src
+    assert "api.disconnect" not in dash_src
+    assert "release_state" not in dash_src
+    # Unmount/cleanup must not stop/cancel/disconnect.
+    assert "stopPollsRef" in dash_src or "cancelled = true" in dash_src
+    assert re.search(
+        r"return\s*\(\)\s*=>\s*\{[^}]*api\.(stop|cancel|disconnect)",
+        dash_src,
+        re.S,
+    ) is None
+    # C6/C7 observability + terminal release labels.
+    assert "connection_scope" in dash_src or "connectionScope" in dash_src
+    assert "device_busy_external" in dash_src or "busyExternal" in dash_src
+    assert "BLE released" in dash_src or "bleReleaseLabel" in dash_src
+    assert "/history" in dash_src
+    assert "buildFinalSummary" in dash_src or "FinalSummaryPanel" in dash_src
+    # Event observation epoch + poll constant (no hard-coded 2000 for events).
+    assert "isEventObservationCurrent" in dash_src
+    assert "eventGenerationRef" in dash_src
+    assert "EVENTS_POLL_MS" in dash_src
+    # Sticky busy cleared only on explicit refresh / successful control.
+    assert "clearStickyBusy" in dash_src
+    assert "clearStickyBusyPendingRef" in dash_src
+    # Explicit event rearm survives in-flight polls (generation bump).
+    assert "applyExplicitEventRearm" in dash_src
+    assert "applyExplicitEventRearm" in monitor_src
+    # Stale workflow requires explicit UI acknowledgement (no silent control).
+    assert "Use active workflow" in dash_src
+    assert "ackedActiveId" in dash_src or "needsAcknowledgement" in dash_src
+    assert "needsAcknowledgement" in monitor_src
+    # Event observation errors are separate from status errors.
+    assert "eventError" in dash_src
+    assert 'handleObserveFailure(e, "events")' in dash_src or 'surface === "events"' in dash_src
+    # connection_scope null displays none; do not invent daemon/connected source labels.
+    assert '"none"' in dash_src or "'none'" in dash_src
+    assert 'connected ? "connected"' not in dash_src
+    assert 'running ? "daemon"' not in dash_src
+    assert '? "bridge"' not in dash_src or "summary?.source" in dash_src
+    # Do not invent stored kind on status success.
+    assert 'kind: "coffee"' not in dash_src and "kind: 'coffee'" not in dash_src
+    # No visible implementation/tutorial copy in user-facing strings.
+    assert "never sends a request ID" not in dash_src
+    assert "IDs are never invented here" not in dash_src
+    assert "Observation never starts the daemon" not in dash_src
+    assert "This is not a loading state" not in dash_src
+    assert "will not resync until" not in dash_src
+    assert "will not resync until" not in monitor_src
+    # gap_reason surfaced for persistent event gaps.
+    assert "gap_reason" in api_src
+    assert "formatEventSyncWarning" in dash_src or "eventSyncWarning" in dash_src
+    assert "Timeline unavailable" in monitor_src
+
+    # Pure logic contracts.
+    assert "selectTrackedWorkflowId" in monitor_src
+    assert "applyInstanceChange" in monitor_src
+    assert "applyGapDetected" in monitor_src
+    assert "applyResyncPageResult" in monitor_src
+    assert "isEventObservationCurrent" in monitor_src
+    assert "captureEventObservation" in monitor_src
+    assert "buildFinalSummary" in monitor_src
+    assert "findLatestTerminalEvent" in monitor_src
+    assert "mergeDurableEvents" in monitor_src
+    assert "bleReleaseLabel" in monitor_src
+    assert "validControlsForPhase" in monitor_src
+    assert "EVENTS_POLL_MS" in monitor_src
+    assert "device_busy_external" in errors_src
+    assert "recovery_required" in errors_src
+    assert "auth_expired" in errors_src or "isAuthExpiredError" in errors_src
+    # Provider timeout only when explicit or Design context (not every timeout).
+    assert "isProviderTimeoutError" in errors_src
+
+    # Auth 401 -> refresh pairing gate (no request loop).
+    assert "setAuthExpiredHandler" in api_src
+    assert "setAuthExpiredHandler" in auth_src
 
     # Brew confirmation owns load/start with one newRequestId per action.
     assert "newRequestId" in brew_src
@@ -246,6 +335,81 @@ def test_frontend_explicit_workflow_and_cancel_no_generic_call():
     # request_id comes from newRequestId; workflow_id comes only from load/status.
     assert "newRequestId(\"load\")" in brew_src or "newRequestId('load')" in brew_src
     assert "newRequestId(\"start\")" in brew_src or "newRequestId('start')" in brew_src
+
+
+def test_frontend_dashboard_typed_controls_and_reconcile_semantics():
+    """Typed control bodies: request_id on mutations; never on reconcile."""
+
+    dash_src = _read(REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx")
+    api_src = _read(REPO_ROOT / "frontend" / "src" / "api.ts")
+
+    # recoveryReconcile adapter must not send request_id.
+    reconcile_block = api_src[
+        api_src.index("recoveryReconcile") : api_src.index("recoveryReconcile") + 500
+    ]
+    assert "workflow_id" in reconcile_block
+    assert "request_id" not in reconcile_block
+
+    # Dashboard reconcile path uses recoveryReconcile(workflowId) only.
+    assert "api.recoveryReconcile(workflowId)" in dash_src or re.search(
+        r"recoveryReconcile\(\s*workflowId", dash_src
+    )
+    # Pause/resume/stop/cancel receive a fresh request id.
+    assert "newRequestId(action)" in dash_src or "newRequestId(" in dash_src
+    assert "api.pause(workflowId, requestId)" in dash_src
+    assert "api.resume(workflowId, requestId)" in dash_src
+    assert "api.stop(workflowId, requestId)" in dash_src
+    assert "api.cancel(workflowId, requestId)" in dash_src
+
+    # Events require workflow_id query param (exact tracked id).
+    assert "bridgeEvents" in api_src
+    assert "workflow_id=" in api_src
+    assert "encodeURIComponent(workflowId)" in api_src
+
+    # Dashboard validates workflow_id on both incremental and zero-resync pages.
+    assert dash_src.count("page.workflow_id") >= 1
+    assert "full.workflow_id" in dash_src
+    # Unmount finally must guard React state setters.
+    assert "stopPollsRef.current" in dash_src
+    # No manual disconnect action in workflow UI (status last_disconnect_* fields OK).
+    assert "api.disconnect" not in dash_src
+    assert re.search(r"\bonClick=\{[^}]*disconnect", dash_src) is None
+    assert re.search(r">\s*Disconnect\s*<", dash_src) is None
+
+
+def test_frontend_monitor_logic_exports_race_and_summary_helpers():
+    """Source-contract: race/gap/summary helpers exist as real exports."""
+
+    monitor_src = _read(REPO_ROOT / "frontend" / "src" / "lib" / "monitorLogic.ts")
+    errors_src = _read(REPO_ROOT / "frontend" / "src" / "lib" / "apiErrors.ts")
+    test_monitor = _read(
+        REPO_ROOT / "frontend" / "src" / "lib" / "monitorLogic.test.ts"
+    )
+    test_errors = _read(REPO_ROOT / "frontend" / "src" / "lib" / "apiErrors.test.ts")
+
+    for name in (
+        "export function isEventObservationCurrent",
+        "export function captureEventObservation",
+        "export function applyResyncPageResult",
+        "export function buildFinalSummary",
+        "export function findLatestTerminalEvent",
+        "export const EVENTS_POLL_MS",
+    ):
+        assert name in monitor_src, name
+
+    assert "export function isProviderTimeoutError" in errors_src
+    # Prefer server details.workflow_id over known stale id.
+    assert "detailsWorkflowId" in errors_src or "details.workflow_id" in errors_src
+
+    # Deterministic tests cover race, persistent gap, summary, timeout split.
+    assert "rejects response after workflow identity change" in test_monitor
+    assert "rejects response after instance change" in test_monitor
+    assert "persistent gap on zero-resync" in test_monitor
+    assert "builds summary from latest same-workflow terminal event" in test_monitor
+    assert "terminal event proves durable terminal" in test_monitor
+    assert "Design timeout as provider_timeout" in test_errors
+    assert "hardware control timeout" in test_errors
+    assert "prefers server details.workflow_id" in test_errors
 
 
 def test_main_still_ensures_daemon_on_startup_not_shutdown():

@@ -297,6 +297,41 @@ async function parseApiError(res: Response): Promise<ApiError> {
 }
 
 // ---------------------------------------------------------------------------
+// Auth-expiry signal (AuthContext registers a single-shot refresh)
+// ---------------------------------------------------------------------------
+
+type AuthExpiredHandler = () => void;
+
+let authExpiredHandler: AuthExpiredHandler | null = null;
+/** Guard so concurrent 401s trigger at most one refresh storm stop. */
+let authExpiredNotified = false;
+
+/**
+ * Register a handler for LAN session 401s. AuthProvider calls this once.
+ * The handler should refresh AuthContext so the app returns to the pairing gate.
+ * Does not loop requests itself - callers must stop their own polls.
+ */
+export function setAuthExpiredHandler(handler: AuthExpiredHandler | null): void {
+  authExpiredHandler = handler;
+  authExpiredNotified = false;
+}
+
+/** Test/reset helper: clear the one-shot 401 guard after a successful re-auth. */
+export function resetAuthExpiredGuard(): void {
+  authExpiredNotified = false;
+}
+
+function notifyAuthExpiredOnce(): void {
+  if (authExpiredNotified) return;
+  authExpiredNotified = true;
+  try {
+    authExpiredHandler?.();
+  } catch {
+    /* never break the throw path */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
@@ -359,6 +394,10 @@ async function request<T>(
   }
 
   if (!res.ok) {
+    // 401 on protected routes: signal AuthContext once; do not auto-retry.
+    if (res.status === 401 && !isPairExchange(path, method)) {
+      notifyAuthExpiredOnce();
+    }
     throw await parseApiError(res);
   }
 
@@ -694,12 +733,58 @@ export type ProbeResult = {
   [key: string]: unknown;
 };
 
+/** Durable workflow summary from bridge status (storage.workflow_summary). */
+export type WorkflowSummary = {
+  workflow_id: string;
+  kind?: string | null;
+  state?: string | null;
+  source?: string | null;
+  owner?: string | null;
+  snapshot_sha256?: string | null;
+  recipe_revision_id?: string | null;
+  machine_phase?: string | null;
+  recovery?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  terminal_at?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type RecoveryState = {
+  required: boolean;
+  detail?: Record<string, unknown> | null;
+};
+
+/**
+ * Bridge status contract (core BridgeDaemon.status / offline adapter snapshot).
+ * release_state does not exist - use connected + release_pending + last_disconnect_*.
+ */
 export type BridgeState = {
   running: boolean;
   available?: boolean;
   hint?: string;
+  error?: string;
+  protocol_version?: number | string | null;
+  rpc_protocol_min?: number | null;
+  rpc_protocol_max?: number | null;
+  rpc_protocol_current?: number | null;
+  record_format_version?: number | string | null;
+  instance_id?: string | null;
+  core_version?: string | null;
+  config_fingerprint?: string | null;
+  started_at?: number | string | null;
+  pid?: number | null;
   connected?: boolean;
   machine?: string | null;
+  address_configured?: boolean;
+  connection_scope?: string | null;
+  release_pending?: boolean;
+  last_disconnect_reason?: string | null;
+  last_disconnect_time?: number | string | null;
+  last_disconnect_error?: string | null;
+  idle_disconnect_s?: number | null;
+  idle_orphan_since?: number | string | null;
+  idle_orphan_deadline?: number | string | null;
   activity?: string | null;
   phase?: string | null;
   machine_state?: string | null;
@@ -710,24 +795,37 @@ export type BridgeState = {
   last_operation?: Record<string, unknown> | null;
   last_error?: string | null;
   recovery_records?: string[];
+  idle?: boolean;
   active_workflow_id?: string | null;
-  workflow?: Record<string, unknown> | null;
-  connection_scope?: string | null;
-  release_state?: string | null;
+  workflow?: WorkflowSummary | Record<string, unknown> | null;
+  recovery?: RecoveryState | Record<string, unknown> | null;
+  live_adjust?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 
+/** Durable workflow event row (source=durable). */
 export type BridgeEvent = {
+  id?: string | number;
+  workflow_id?: string;
   seq: number;
+  event_type?: string;
+  created_at?: string | number;
+  payload?: Record<string, unknown> | null;
+  // Live-buffer compatibility fields (not used for durable timeline).
   state_name?: string;
   command_code?: number;
   [key: string]: unknown;
 };
 
 export type BridgeEventsResult = {
-  running?: boolean;
+  workflow_id?: string;
   events: BridgeEvent[];
   next_since: number;
+  gap_detected?: boolean;
+  gap_reason?: string | null;
+  max_seq?: number | null;
+  source?: "durable" | "live" | string;
+  running?: boolean;
 };
 
 export type WorkflowResult = {

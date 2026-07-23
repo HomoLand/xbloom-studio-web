@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test src/lib/monitorLogic.test.ts src/lib/apiErrors.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.25.0",

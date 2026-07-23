@@ -24,6 +24,7 @@ from web_security.config import (
     LOOPBACK_DEV_ORIGINS,
     WebSecurityConfig,
     load_web_security_config,
+    loopback_origins_for_bind_port,
     parse_public_origin,
     parse_trusted_proxies,
 )
@@ -324,6 +325,120 @@ def test_config_lan_happy() -> None:
     assert any(
         ipaddress.ip_address("10.0.0.2") in net for net in cfg.trusted_proxies
     )
+
+
+def test_loopback_bind_port_origins_exact_accept_and_reject() -> None:
+    """Configured bind_port is merged into exact loopback origins; other ports stay out."""
+
+    cfg = load_web_security_config(environ={"XBLOOM_BIND_PORT": "8010"})
+    assert cfg.bind_port == 8010
+    assert "*" not in cfg.cors_origins
+    assert "http://localhost:8010" in cfg.cors_origins
+    assert "http://127.0.0.1:8010" in cfg.cors_origins
+    assert "http://localhost:8011" not in cfg.cors_origins
+    assert "http://127.0.0.1:8011" not in cfg.cors_origins
+    # Fixed dev origins remain; no arbitrary-port expansion.
+    assert set(LOOPBACK_DEV_ORIGINS).issubset(set(cfg.cors_origins))
+    assert cfg.cors_origins == list(loopback_origins_for_bind_port(8010))
+
+    assert cfg.allowed_origin("http://localhost:8010", peer_host="127.0.0.1") is True
+    assert cfg.allowed_origin("http://127.0.0.1:8010", peer_host="127.0.0.1") is True
+    assert cfg.allowed_origin("http://localhost:8011", peer_host="127.0.0.1") is False
+    assert cfg.allowed_origin("http://127.0.0.1:8011", peer_host="127.0.0.1") is False
+    assert cfg.allowed_origin("http://192.168.1.1:8010", peer_host="127.0.0.1") is False
+
+
+def test_loopback_bind_port_default_unchanged() -> None:
+    cfg = load_web_security_config(environ={})
+    assert cfg.bind_port == 8000
+    assert cfg.cors_origins == list(loopback_origins_for_bind_port(8000))
+    # Deduped: default port already in LOOPBACK_DEV_ORIGINS.
+    assert cfg.cors_origins.count("http://127.0.0.1:8000") == 1
+
+
+def test_lan_bind_port_loopback_bootstrap_only_public_cors() -> None:
+    """LAN public CORS stays [public_origin]; local bootstrap may use bind-port loopback origins."""
+
+    cfg = load_web_security_config(
+        environ={
+            "XBLOOM_WEB_MODE": "lan",
+            "XBLOOM_PUBLIC_ORIGIN": PUBLIC_ORIGIN,
+            "XBLOOM_TRUSTED_PROXIES": "10.0.0.2/32",
+            "XBLOOM_BIND_PORT": "8010",
+        }
+    )
+    assert cfg.cors_origins == [PUBLIC_ORIGIN]
+    assert "*" not in cfg.cors_origins
+    assert "http://127.0.0.1:8010" in cfg.loopback_origins
+    # Direct local bootstrap peer may use exact loopback bind-port origin.
+    assert cfg.allowed_origin("http://127.0.0.1:8010", peer_host="127.0.0.1") is True
+    assert cfg.allowed_origin("http://localhost:8010", peer_host="127.0.0.1") is True
+    assert cfg.allowed_origin("http://127.0.0.1:8011", peer_host="127.0.0.1") is False
+    # Proxied / non-bootstrap peer: only exact HTTPS public origin.
+    assert cfg.allowed_origin("http://127.0.0.1:8010", peer_host="10.0.0.2") is False
+    assert cfg.allowed_origin(PUBLIC_ORIGIN, peer_host="10.0.0.2") is True
+    assert cfg.allowed_origin("https://evil.example", peer_host="10.0.0.2") is False
+
+
+def test_static_asset_accepts_configured_bind_port_origin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Browser-like SPA asset requests (Vite crossorigin Origin) must not 403."""
+
+    cfg = _loopback_config(bind_port=8010)
+    frontend_dist = BACKEND_DIR.parent / "frontend" / "dist"
+    assets_dir = frontend_dist / "assets"
+    asset_name = None
+    if assets_dir.is_dir():
+        for candidate in assets_dir.iterdir():
+            if candidate.suffix in {".js", ".css"} and candidate.is_file():
+                asset_name = candidate.name
+                break
+
+    with loopback_client(monkeypatch, tmp_path, config=cfg) as (client, _, resolved):
+        assert "http://127.0.0.1:8010" in resolved.cors_origins
+        origin_ok = "http://127.0.0.1:8010"
+        origin_bad = "http://127.0.0.1:8011"
+
+        health = client.get("/api/health", headers={"Origin": origin_ok})
+        assert health.status_code == 200
+
+        denied = client.get("/api/health", headers={"Origin": origin_bad})
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "origin_denied"
+
+        # Same-origin static surface (index + built asset when present).
+        index_res = client.get("/", headers={"Origin": origin_ok})
+        assert index_res.status_code != 403
+        if index_res.headers.get("content-type", "").startswith("application/json"):
+            body = index_res.json()
+            assert body.get("error", {}).get("code") != "origin_denied"
+
+        if asset_name is not None:
+            asset_res = client.get(
+                f"/assets/{asset_name}",
+                headers={"Origin": origin_ok},
+            )
+            assert asset_res.status_code == 200, asset_res.text
+            assert asset_res.status_code != 403
+
+            asset_denied = client.get(
+                f"/assets/{asset_name}",
+                headers={"Origin": origin_bad},
+            )
+            assert asset_denied.status_code == 403
+            assert asset_denied.json()["error"]["code"] == "origin_denied"
+
+
+def test_loopback_origins_helper_no_wildcard() -> None:
+    origins = loopback_origins_for_bind_port(8010)
+    assert "*" not in origins
+    assert "http://localhost:8010" in origins
+    assert "http://127.0.0.1:8010" in origins
+    # Only exact listed + bind_port; never a port range or scheme wildcard.
+    for origin in origins:
+        assert origin.startswith("http://")
+        assert "*" not in origin
 
 
 # ---------------------------------------------------------------------------

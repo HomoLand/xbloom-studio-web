@@ -4,12 +4,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import {
   api,
   ApiError,
+  resetAuthExpiredGuard,
+  setAuthExpiredHandler,
   type AuthConfig,
   type AuthSessionResponse,
   type SessionInfo,
@@ -40,6 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [mode, setMode] = useState<"loopback" | "lan" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Prevent overlapping refresh storms from concurrent 401s. */
+  const refreshingRef = useRef(false);
 
   const applySession = useCallback(
     (cfg: AuthConfig, sess: AuthSessionResponse) => {
@@ -68,6 +73,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const refresh = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     setError(null);
     try {
       const cfg = await api.authConfig();
@@ -84,14 +91,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
       applySession(cfg, sess);
+      // Successful auth probe: allow a future 401 to notify again.
+      resetAuthExpiredGuard();
     } catch (e) {
       setStatus("error");
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      refreshingRef.current = false;
     }
   }, [applySession]);
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // On API 401, refresh once so LAN returns to pairing gate. No request loops.
+  useEffect(() => {
+    setAuthExpiredHandler(() => {
+      void refresh();
+    });
+    return () => setAuthExpiredHandler(null);
   }, [refresh]);
 
   const logout = useCallback(async () => {
@@ -111,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const markAuthenticated = useCallback((s: SessionInfo) => {
     setSession(s);
     setStatus("ready");
+    resetAuthExpiredGuard();
   }, []);
 
   const value = useMemo<AuthContextValue>(

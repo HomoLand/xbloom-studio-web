@@ -43,7 +43,8 @@ SESSION_COOKIE_NAME = "xbloom_session"
 CSRF_COOKIE_NAME = "xbloom_csrf"
 CSRF_HEADER_NAME = "x-csrf-token"
 
-# Exact loopback frontend origins (no wildcards).
+# Exact loopback frontend origins (no wildcards). Fixed dev/preview ports only;
+# the configured server bind_port is merged in via loopback_origins_for_bind_port.
 LOOPBACK_DEV_ORIGINS: tuple[str, ...] = (
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -54,6 +55,27 @@ LOOPBACK_DEV_ORIGINS: tuple[str, ...] = (
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 )
+
+
+def loopback_origins_for_bind_port(bind_port: int) -> tuple[str, ...]:
+    """Exact loopback origins for a validated bind port plus fixed dev origins.
+
+    Returns a deduplicated tuple of LOOPBACK_DEV_ORIGINS and
+    ``http://localhost:{bind_port}`` / ``http://127.0.0.1:{bind_port}``.
+
+    No wildcards, no arbitrary ports, no Host-header trust: only the fixed
+    dev list and the single configured bind_port.
+    """
+
+    if not isinstance(bind_port, int) or isinstance(bind_port, bool):
+        raise ValueError(f"bind_port must be an int 1..65535, got {bind_port!r}")
+    if bind_port < 1 or bind_port > 65535:
+        raise ValueError(f"bind_port must be between 1 and 65535, got {bind_port}")
+    bind_origins = (
+        f"http://localhost:{bind_port}",
+        f"http://127.0.0.1:{bind_port}",
+    )
+    return tuple(dict.fromkeys((*LOOPBACK_DEV_ORIGINS, *bind_origins)))
 
 # Explicit CORS surface (never "*").
 CORS_ALLOW_METHODS: tuple[str, ...] = (
@@ -237,6 +259,19 @@ class WebSecurityConfig:
     csrf_cookie_name: str = CSRF_COOKIE_NAME
     csrf_header_name: str = CSRF_HEADER_NAME
 
+    def __post_init__(self) -> None:
+        # Always include exact origins for the configured bind_port so SPA
+        # assets served from the same process (Vite adds crossorigin) are not
+        # rejected when XBLOOM_BIND_PORT is non-default. Deduped; never widens
+        # beyond fixed dev ports + this single bind_port.
+        bind_exact = (
+            f"http://localhost:{self.bind_port}",
+            f"http://127.0.0.1:{self.bind_port}",
+        )
+        merged = tuple(dict.fromkeys((*self.loopback_origins, *bind_exact)))
+        if merged != self.loopback_origins:
+            object.__setattr__(self, "loopback_origins", merged)
+
     @property
     def is_lan(self) -> bool:
         return self.mode == MODE_LAN
@@ -247,6 +282,9 @@ class WebSecurityConfig:
 
     @property
     def cors_origins(self) -> list[str]:
+        # LAN public CORS stays exactly [public_origin]. Loopback-origin set
+        # (including configured bind_port) is used only via allowed_origin for
+        # direct local bootstrap, not reflected as public CORS.
         if self.is_lan:
             assert self.public_origin is not None
             return [self.public_origin]
@@ -383,4 +421,5 @@ def load_web_security_config(
         pairing_rate_limit_window_s=rate_window,
         bind_host=bind_host,
         bind_port=bind_port,
+        loopback_origins=loopback_origins_for_bind_port(bind_port),
     )

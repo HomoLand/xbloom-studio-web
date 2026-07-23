@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 import uvicorn
@@ -33,7 +34,10 @@ def main(argv: list[str] | None = None) -> int:
         "--port",
         type=int,
         default=None,
-        help="Override bind port (default XBLOOM_BIND_PORT or 8000)",
+        help=(
+            "Override bind port (sets XBLOOM_BIND_PORT so listen address and "
+            "security origin allowlist stay consistent; default XBLOOM_BIND_PORT or 8000)"
+        ),
     )
     parser.add_argument(
         "--reload",
@@ -42,14 +46,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Keep uvicorn listen address and WebSecurityConfig.bind_port aligned so
+    # SPA same-origin asset Origins (Vite crossorigin) match the allowlist.
+    if args.port is not None:
+        os.environ["XBLOOM_BIND_PORT"] = str(args.port)
+    if args.host is not None:
+        os.environ["XBLOOM_BIND_HOST"] = args.host
+
     try:
         config = load_web_security_config()
     except ValueError as exc:
         print(f"web security configuration error: {exc}", file=sys.stderr)
         return 2
 
-    host = args.host or config.bind_host
-    port = args.port if args.port is not None else config.bind_port
+    host = config.bind_host
+    port = config.bind_port
 
     logging.basicConfig(
         level=logging.INFO,

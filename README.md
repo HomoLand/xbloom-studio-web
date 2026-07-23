@@ -89,10 +89,14 @@ cd ..\backend
 # $env:XBLOOM_ASSETS_DIR = "C:\path\to\knowledge-1.2.0\assets"
 # 本地开发示例（sibling brew assets）：
 $env:XBLOOM_ASSETS_DIR = "C:\Users\SajoL\Documents\Code\xbloom-studio-brew\skills\xbloom-studio-brew\assets"
-uvicorn main:app --host 127.0.0.1 --port 8000
+# 推荐：python -m serve（监听端口与安全 Origin 白名单同源自 XBLOOM_BIND_PORT）
+python -m serve
+# 或显式对齐端口（二者必须一致；仅改 uvicorn --port 而不设 XBLOOM_BIND_PORT 会导致 SPA 静态资源 403）：
+# $env:XBLOOM_BIND_PORT = "8000"
+# uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-浏览器打开 `http://127.0.0.1:8000`。
+浏览器打开 `http://127.0.0.1:8000`（非默认端口时设置 `$env:XBLOOM_BIND_PORT` 并打开对应地址）。
 
 后端启动时调用 core 的 `ensure_bridge_daemon()`，在独立进程中拉起或复用 BLE bridge 守护进程（**不会**搜索 Skill 的 `xbloom.py` 脚本，也**不会**为启动而连接 BLE）。bridge 与后端进程解耦：后端 `--reload` / 崩溃 / 主动停止都不会中断 bridge，正在进行的冲煮会继续跑完。停止 bridge 使用 core CLI，例如 `xbloom-bridge stop` 或 `python -m xbloom_ble.bridge stop`（需已安装 `xbloom-studio-core`）。
 
@@ -194,14 +198,17 @@ $env:XBLOOM_DESIGN_MODE = "vision"
 | `XBLOOM_PAIRING_RATE_LIMIT_MAX` | 无效配对尝试次数上限（按客户端 IP，持久化） | `10` |
 | `XBLOOM_PAIRING_RATE_LIMIT_WINDOW_S` | 配对限速窗口（秒） | `900` |
 | `XBLOOM_BIND_HOST` | 监听地址（middleware 仍是策略边界） | loopback/`lan` 默认 `127.0.0.1` |
-| `XBLOOM_BIND_PORT` | 监听端口 | `8000` |
+| `XBLOOM_BIND_PORT` | 监听端口；loopback 精确 Origin 白名单会并入 `http://localhost:{port}` 与 `http://127.0.0.1:{port}`（无通配） | `8000` |
 
 ```powershell
 # 默认 loopback（本机）
 cd backend
 .venv\Scripts\Activate.ps1
 python -m serve
-# 等价：uvicorn main:app --host 127.0.0.1 --port 8000
+# 非默认端口：先设 XBLOOM_BIND_PORT，或 `python -m serve --port 8010`（会同步该 env）
+# 直接 uvicorn 时必须同时设 env 与 --port，否则 Vite 带 crossorigin 的 /assets 会被 Origin 校验拒绝：
+# $env:XBLOOM_BIND_PORT = "8010"
+# uvicorn main:app --host 127.0.0.1 --port 8010
 
 # LAN（仅示例占位：换成你自己的本地域名与反向代理 IP；勿提交真实域名）
 $env:XBLOOM_WEB_MODE = "lan"

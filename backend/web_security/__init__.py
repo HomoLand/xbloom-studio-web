@@ -11,6 +11,7 @@ from web_security.config import (
     LOOPBACK_DEV_ORIGINS,
     WebSecurityConfig,
     load_web_security_config,
+    loopback_origins_for_bind_port,
 )
 from web_security.errors import SecurityError
 from web_security.middleware import WebSecurityMiddleware
@@ -28,4 +29,5 @@ __all__ = [
     "auth_router",
     "install_security_exception_handlers",
     "load_web_security_config",
+    "loopback_origins_for_bind_port",
 ]
