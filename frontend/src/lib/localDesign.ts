@@ -24,6 +24,8 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 const SYSTEM = `You are an xBloom Studio pour-over recipe designer.
+The user may attach multiple images (e.g. bean-bag front + brew/recipe card).
+Use all images together: bag for origin/process/notes, card for official parameters when present.
 Return ONLY a single JSON object (no markdown fences) with this shape:
 {
   "name": string,
@@ -100,6 +102,9 @@ function toContent(obj: Record<string, unknown>): RecipeContent {
 
 export async function designWithLocalAi(opts: {
   text: string;
+  /** One or more images (bag cover, brew card, etc.). */
+  images?: File[];
+  /** @deprecated use images */
   image?: File | null;
   config?: AiConfig;
 }): Promise<LocalDesignResult> {
@@ -112,13 +117,19 @@ export async function designWithLocalAi(opts: {
   const base = cfg.baseUrl.replace(/\/+$/, "");
   const url = `${base}/chat/completions`;
 
+  const files: File[] = [];
+  if (opts.images?.length) files.push(...opts.images);
+  else if (opts.image) files.push(opts.image);
+
   const userContent: Array<Record<string, unknown>> = [];
   const prompt =
     opts.text.trim() ||
-    "Design a balanced 15g hot pour-over for xBloom Studio Omni Dripper 2.";
+    (files.length
+      ? "Design an xBloom Studio pour-over from the attached image(s) (bag and/or brew card)."
+      : "Design a balanced 15g hot pour-over for xBloom Studio Omni Dripper 2.");
   userContent.push({ type: "text", text: prompt });
-  if (opts.image) {
-    const dataUrl = await fileToDataUrl(opts.image);
+  for (const file of files) {
+    const dataUrl = await fileToDataUrl(file);
     userContent.push({
       type: "image_url",
       image_url: { url: dataUrl },
