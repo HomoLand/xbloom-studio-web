@@ -50,6 +50,7 @@ export const ENDPOINTS = {
 
 export const RECIPE_ADD_ENDPOINT = "tuRecipeAdd.tuhtml";
 export const RECIPE_DELETE_ENDPOINT = "tuRecipeDelete.tuhtml";
+export const BREW_RECORD_LIST_ENDPOINT = "tuBrewRecordList.tuhtml";
 
 export const CLOUD_WRITE_CONFIRM = "own-account-cloud-recipe";
 export const CLOUD_DELETE_CONFIRM = "own-account-cloud-recipe-delete";
@@ -418,6 +419,176 @@ export async function syncAccountCatalog(opts: {
     results.push({ target, endpoint, payload });
   }
   return { region, targets: results };
+}
+
+// ---------------------------------------------------------------------------
+// Account brew history (tuBrewRecordList)
+// ---------------------------------------------------------------------------
+
+export type CloudBrewRecordRaw = {
+  remote_table_id: number | null;
+  recipe_name: string | null;
+  serving_kind: "tea" | "xpod" | "coffee";
+  dose_g: number | null;
+  brew_time_s: number | null;
+  create_time_stamp: number | null;
+  recorded_at: string | null;
+  has_line_chart: boolean;
+  line_chart_raw: string | null;
+  group_name: string | null;
+  is_pod: boolean | null;
+  machine_id: number | null;
+  device_id: string | null;
+  mac: string | null;
+};
+
+function firstField(
+  raw: Record<string, unknown>,
+  ...keys: string[]
+): unknown {
+  for (const k of keys) {
+    if (raw[k] !== undefined && raw[k] !== null && raw[k] !== "") return raw[k];
+  }
+  return undefined;
+}
+
+function asOptNumber(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Secret-free normalisation matching packages/core/_normalise_brew_record. */
+export function normaliseBrewRecord(
+  raw: Record<string, unknown>,
+  groupName?: string | null,
+): CloudBrewRecordRaw {
+  const tableId = asOptNumber(firstField(raw, "tableId", "table_id"));
+  const createTs = asOptNumber(
+    firstField(raw, "createTimeStamp", "create_time_stamp"),
+  );
+  let recordedAt: string | null = null;
+  if (createTs != null && createTs > 0) {
+    const ms = createTs > 10_000_000_000 ? createTs : createTs * 1000;
+    recordedAt = new Date(ms).toISOString();
+  }
+  const cupType = asOptNumber(firstField(raw, "cupType", "cup_type"));
+  const isPod = asOptNumber(firstField(raw, "isHavePod", "is_have_pod"));
+  let recipeName = String(
+    firstField(raw, "recipeName", "recipe_name", "theName", "name") ?? "",
+  ).trim();
+  const recipeVo = raw.recipeVo;
+  if (!recipeName && recipeVo && typeof recipeVo === "object") {
+    const vo = recipeVo as Record<string, unknown>;
+    recipeName = String(firstField(vo, "theName", "name") ?? "").trim();
+  }
+  let servingKind: CloudBrewRecordRaw["serving_kind"] = "coffee";
+  if (cupType === 4) servingKind = "tea";
+  else if (isPod === 1) servingKind = "xpod";
+
+  const lineChart = firstField(raw, "lineChartData", "line_chart_data");
+  const lineRaw =
+    lineChart == null
+      ? null
+      : typeof lineChart === "string"
+        ? lineChart
+        : JSON.stringify(lineChart);
+
+  return {
+    remote_table_id: tableId,
+    recipe_name: recipeName || null,
+    serving_kind: servingKind,
+    dose_g: asOptNumber(firstField(raw, "dose", "dose_g")),
+    brew_time_s: asOptNumber(firstField(raw, "brewTime", "brew_time")),
+    create_time_stamp: createTs,
+    recorded_at: recordedAt,
+    has_line_chart: Boolean(lineRaw && String(lineRaw).trim()),
+    line_chart_raw: lineRaw,
+    group_name:
+      groupName ||
+      (firstField(raw, "groupName", "group_name") != null
+        ? String(firstField(raw, "groupName", "group_name"))
+        : null),
+    is_pod: isPod === 1 ? true : isPod === 0 ? false : null,
+    machine_id: asOptNumber(firstField(raw, "machineId", "machine_id")),
+    device_id:
+      firstField(raw, "device_id", "deviceId") != null
+        ? String(firstField(raw, "device_id", "deviceId"))
+        : null,
+    mac:
+      firstField(raw, "mac") != null ? String(firstField(raw, "mac")) : null,
+  };
+}
+
+export function parseBrewRecordPayload(payload: unknown): CloudBrewRecordRaw[] {
+  if (!payload || typeof payload !== "object") return [];
+  const root = payload as Record<string, unknown>;
+  let groups = root.gList;
+  if (groups == null) groups = root.list ?? root.data ?? [];
+  if (!Array.isArray(groups)) return [];
+  const records: CloudBrewRecordRaw[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") continue;
+    const g = group as Record<string, unknown>;
+    const groupName =
+      g.groupName != null
+        ? String(g.groupName)
+        : g.group_name != null
+          ? String(g.group_name)
+          : null;
+    const items = Array.isArray(g.list) ? g.list : [g];
+    for (const item of items) {
+      if (item && typeof item === "object") {
+        records.push(
+          normaliseBrewRecord(item as Record<string, unknown>, groupName),
+        );
+      }
+    }
+  }
+  return records;
+}
+
+/** Login ephemerally and fetch own-account brew history. */
+export async function fetchCloudBrewRecords(opts: {
+  email: string;
+  password: string;
+  region: string;
+  languageType?: number;
+  timeoutMs?: number;
+  keyword?: string;
+}): Promise<{
+  region: CloudRegion;
+  count: number;
+  records: CloudBrewRecordRaw[];
+  endpoint: string;
+}> {
+  const { region, session } = await loginEphemeral(opts);
+  const form: Record<string, unknown> = {
+    ...session,
+    adaptedModel: 1,
+    pageNumber: 1,
+    countPerPage: 0,
+  };
+  if (opts.keyword) form.keyword = opts.keyword;
+  const payload = (await cloudRequest(
+    BASE_URLS[region],
+    BREW_RECORD_LIST_ENDPOINT,
+    form,
+    opts.timeoutMs,
+  )) as Record<string, unknown>;
+  if (payload?.result !== "success") {
+    const code = payload?.resultCode;
+    throw new CloudError(
+      `xBloom brew-record list was rejected${code != null ? ` (resultCode=${code})` : ""}`,
+    );
+  }
+  const records = parseBrewRecordPayload(payload);
+  return {
+    region,
+    count: records.length,
+    records,
+    endpoint: BREW_RECORD_LIST_ENDPOINT,
+  };
 }
 
 const APP_PATTERN_VALUES: Record<string, number> = {

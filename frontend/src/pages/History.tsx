@@ -1,27 +1,36 @@
 /**
- * Local-first brew journal + per-session telemetry (no backend required).
- * On hosted backend, still prefers browser localStorage so static Pages works.
+ * Local-first brew journal + account cloud brew-history sync.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Cloud, Trash2 } from "lucide-react";
 import {
   Alert,
+  Button,
   EmptyState,
+  Field,
   IconButton,
   PageHeader,
   Panel,
+  Select,
   StatusPill,
+  TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
+import { readAccountPrefs, writeAccountPrefs } from "../lib/accountPrefs";
 import {
   clearLocalHistory,
   getLocalHistoryEvent,
   historyStatus,
+  importCloudBrewRecords,
   listLocalHistory,
   type LocalHistoryEvent,
   type TelemetrySample,
 } from "../lib/localHistory";
+import {
+  CloudError,
+  fetchCloudBrewRecords,
+} from "../lib/xbloomCloud";
 import { shortId } from "../lib/recipeDomain";
 
 const OUTCOME_TONE: Record<
@@ -42,9 +51,17 @@ export default function History() {
   const [events, setEvents] = useState<LocalHistoryEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const prefs = readAccountPrefs();
+  const [email, setEmail] = useState(prefs.email);
+  const [password, setPassword] = useState("");
+  const [region, setRegion] = useState<"china" | "international">(prefs.region);
 
   const reload = useCallback(() => {
-    setEvents(listLocalHistory(100));
+    setEvents(listLocalHistory(200));
     setTick((n) => n + 1);
   }, []);
 
@@ -58,6 +75,44 @@ export default function History() {
       events.find((e) => e.event_id === selectedId) ??
       null
     : null;
+
+  const onSyncCloud = async () => {
+    setError(null);
+    setInfo(null);
+    if (!email.trim() || !password) {
+      setError(t("cloud.needCreds"));
+      return;
+    }
+    setBusy(true);
+    try {
+      writeAccountPrefs({ email, region });
+      const result = await fetchCloudBrewRecords({
+        email,
+        password,
+        region,
+        languageType: readAccountPrefs().languageType,
+      });
+      const merged = importCloudBrewRecords(result.records, result.region);
+      setInfo(
+        t("history.syncDone")
+          .replace("{count}", String(result.count))
+          .replace("{imported}", String(merged.imported))
+          .replace("{updated}", String(merged.updated))
+          .replace("{region}", result.region),
+      );
+      reload();
+    } catch (e) {
+      setError(
+        e instanceof CloudError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -89,7 +144,67 @@ export default function History() {
         {t("history.localMode")}
       </Alert>
 
-      <div className="mb-5 grid grid-cols-3 gap-3">
+      {error ? (
+        <Alert tone="red" className="mb-4">
+          {error}
+        </Alert>
+      ) : null}
+      {info ? (
+        <Alert tone="green" className="mb-4">
+          {info}
+        </Alert>
+      ) : null}
+
+      <Panel title={t("history.cloudSync")} className="mb-4">
+        <p className="mb-3 text-xs text-ink-muted">{t("history.cloudHint")}</p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label={t("cloud.email")}>
+            <TextInput
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </Field>
+          <Field label={t("cloud.password")}>
+            <TextInput
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={t("cloud.passwordHint")}
+            />
+          </Field>
+          <Field label={t("cloud.region")}>
+            <Select
+              value={region}
+              onChange={(e) =>
+                setRegion(
+                  e.target.value === "international"
+                    ? "international"
+                    : "china",
+                )
+              }
+            >
+              <option value="china">{t("cloud.regionCn")}</option>
+              <option value="international">{t("cloud.regionIntl")}</option>
+            </Select>
+          </Field>
+          <div className="flex items-end">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => void onSyncCloud()}
+            >
+              <Cloud className="h-3.5 w-3.5" aria-hidden />
+              {busy ? t("common.loading") : t("history.sync")}
+            </Button>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label={t("history.total")} value={status.total} />
         <Stat
           label={t("history.completed")}
@@ -101,6 +216,10 @@ export default function History() {
             (status.by_outcome?.failed ?? 0) +
             (status.by_outcome?.cancelled ?? 0)
           }
+        />
+        <Stat
+          label={t("history.fromCloud")}
+          value={status.by_source?.["app-cloud"] ?? 0}
         />
       </div>
 
@@ -132,6 +251,13 @@ export default function History() {
                         >
                           {e.outcome}
                         </StatusPill>
+                        {e.source === "app-cloud" ? (
+                          <StatusPill tone="amber">
+                            {t("history.cloudBadge")}
+                          </StatusPill>
+                        ) : e.source === "web-bluetooth" ? (
+                          <StatusPill tone="green">web-ble</StatusPill>
+                        ) : null}
                         <span className="truncate text-sm font-medium text-ink">
                           {e.recipe_name || shortId(e.event_id, 10)}
                         </span>
@@ -139,6 +265,8 @@ export default function History() {
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-ink-faint">
                         <span>
                           {e.source}
+                          {e.dose_g != null ? ` · ${e.dose_g}g` : ""}
+                          {e.brew_time_s != null ? ` · ${e.brew_time_s}s` : ""}
                           {e.telemetry?.length
                             ? ` · ${e.telemetry.length} pts`
                             : ""}
@@ -177,6 +305,9 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
         {event.kind ? (
           <StatusPill tone="neutral">{event.kind}</StatusPill>
         ) : null}
+        {event.source === "app-cloud" ? (
+          <StatusPill tone="amber">{t("history.cloudBadge")}</StatusPill>
+        ) : null}
       </div>
       <dl className="grid gap-1.5 sm:grid-cols-2 text-ink-muted">
         <div>
@@ -191,6 +322,30 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
           <div>
             {t("history.machine")}{" "}
             <span className="text-ink">{event.machine}</span>
+          </div>
+        ) : null}
+        {event.dose_g != null ? (
+          <div>
+            {t("recipes.dose")}{" "}
+            <span className="text-ink">{event.dose_g} g</span>
+          </div>
+        ) : null}
+        {event.brew_time_s != null ? (
+          <div>
+            {t("history.brewTime")}{" "}
+            <span className="text-ink">{event.brew_time_s} s</span>
+          </div>
+        ) : null}
+        {event.remote_table_id != null ? (
+          <div>
+            tableId{" "}
+            <span className="text-ink">{event.remote_table_id}</span>
+          </div>
+        ) : null}
+        {event.group_name ? (
+          <div>
+            {t("history.group")}{" "}
+            <span className="text-ink">{event.group_name}</span>
           </div>
         ) : null}
         {event.workflow_id ? (
@@ -222,7 +377,7 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
         ) : (
           <>
             <TelemetrySpark samples={samples} />
-            <div className="mt-2 max-h-56 overflow-auto rounded-md border border-line">
+            <div className="mt-2 max-h-56 overflow-auto rounded-xl border border-line">
               <table className="w-full text-left text-[11px]">
                 <thead className="sticky top-0 bg-surface-2 text-ink-muted">
                   <tr>
@@ -261,7 +416,6 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
   );
 }
 
-/** Lightweight SVG sparkline for cup weight + water over time. */
 function TelemetrySpark({ samples }: { samples: TelemetrySample[] }) {
   const w = 320;
   const h = 72;

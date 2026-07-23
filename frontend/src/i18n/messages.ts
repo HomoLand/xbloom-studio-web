@@ -66,15 +66,18 @@ export const messages: Record<Locale, Record<string, string>> = {
     "recipes.deleteLocalConfirm": "从本浏览器删除此配方？不会删除云端。",
 
     "history.title": "历史",
-    "history.desc": "本机冲煮记录与全过程遥测（浏览器存储，无需后端）。",
-    "history.localMode": "本地历史：冲煮结束后自动写入，含杯重/出水量时间序列。",
+    "history.desc": "本机冲煮记录、全过程遥测，以及官方账号冲煮历史同步。",
+    "history.localMode":
+      "本地历史：Web 蓝牙冲煮自动写入；也可从 xBloom 账号同步 App 冲煮记录。",
     "history.total": "总计",
     "history.completed": "完成",
     "history.failed": "失败/取消",
+    "history.fromCloud": "账号同步",
     "history.list": "记录",
     "history.detail": "详情",
     "history.empty": "暂无冲煮记录",
-    "history.emptyHint": "用 Web 蓝牙完成一次冲煮后会出现在这里。",
+    "history.emptyHint":
+      "用 Web 蓝牙冲煮，或在上方同步官方账号历史后会出现在这里。",
     "history.selectHint": "选择一条记录查看遥测",
     "history.when": "时间",
     "history.source": "来源",
@@ -85,6 +88,15 @@ export const messages: Record<Locale, Record<string, string>> = {
     "history.noTelemetry": "此条无遥测采样",
     "history.clear": "清空历史",
     "history.clearConfirm": "清空全部本地冲煮历史？",
+    "history.cloudSync": "同步账号冲煮历史",
+    "history.cloudHint":
+      "从 xBloom 官方账号拉取 App 冲煮记录并合并到本机（按 tableId 去重）。密码不落盘。",
+    "history.sync": "同步账号历史",
+    "history.syncDone":
+      "已同步 {region}：云端 {count} 条，新增 {imported}，更新 {updated}",
+    "history.cloudBadge": "账号",
+    "history.brewTime": "冲煮时长",
+    "history.group": "分组",
 
     "tools.title": "工具",
     "tools.desc": "研磨、出热水、电子秤（与主项目 FreeSolo 协议一致）。",
@@ -119,6 +131,8 @@ export const messages: Record<Locale, Record<string, string>> = {
     "cloud.noRecipe": "请先选择一条配方",
     "cloud.needTableId": "此配方没有云端 tableId，请先同步或上传",
     "cloud.syncDone": "已同步 {region}：导入 {imported}/{candidates} 条",
+    "cloud.syncHistoryNote": "冲煮历史 +{imported}/更新 {updated}",
+    "cloud.syncHistoryFailed": "冲煮历史同步失败（可到历史页单独重试）",
     "cloud.alreadyPresent": "账号已有同名配方（tableId={id}）",
     "cloud.created": "已创建云端配方 tableId={id}",
     "cloud.deleted": "已删除云端 tableId={id}",
@@ -289,15 +303,18 @@ export const messages: Record<Locale, Record<string, string>> = {
     "recipes.deleteLocalConfirm": "Remove this recipe from this browser? Cloud is unchanged.",
 
     "history.title": "History",
-    "history.desc": "Local brew journal and full-session telemetry (browser storage, no backend).",
-    "history.localMode": "Local history: auto-saved after brew with cup weight / water time series.",
+    "history.desc": "Local brew journal, full-session telemetry, and official account brew-history sync.",
+    "history.localMode":
+      "Local history: auto-saved after Web Bluetooth brew; you can also sync App brew records from your xBloom account.",
     "history.total": "Total",
     "history.completed": "Completed",
     "history.failed": "Failed/cancelled",
+    "history.fromCloud": "From account",
     "history.list": "Events",
     "history.detail": "Detail",
     "history.empty": "No brew events yet",
-    "history.emptyHint": "Complete a Web Bluetooth brew and it will appear here.",
+    "history.emptyHint":
+      "Brew over Web Bluetooth, or sync official account history above.",
     "history.selectHint": "Select an event to inspect telemetry",
     "history.when": "When",
     "history.source": "Source",
@@ -308,6 +325,15 @@ export const messages: Record<Locale, Record<string, string>> = {
     "history.noTelemetry": "No telemetry samples for this event",
     "history.clear": "Clear history",
     "history.clearConfirm": "Clear all local brew history?",
+    "history.cloudSync": "Sync account brew history",
+    "history.cloudHint":
+      "Pull App brew records from your xBloom account into this browser (deduped by tableId). Password is not stored.",
+    "history.sync": "Sync account history",
+    "history.syncDone":
+      "Synced {region}: {count} cloud records, +{imported} new, {updated} updated",
+    "history.cloudBadge": "Account",
+    "history.brewTime": "Brew time",
+    "history.group": "Group",
 
     "tools.title": "Tools",
     "tools.desc": "Grinder, free hot water, and scale (FreeSolo frames, parity with core).",
@@ -342,6 +368,8 @@ export const messages: Record<Locale, Record<string, string>> = {
     "cloud.noRecipe": "Select a recipe first",
     "cloud.needTableId": "This recipe has no cloud tableId — sync or upload first",
     "cloud.syncDone": "Synced {region}: imported {imported}/{candidates}",
+    "cloud.syncHistoryNote": "brew history +{imported}/{updated} updated",
+    "cloud.syncHistoryFailed": "brew history sync failed (retry on History page)",
     "cloud.alreadyPresent": "Account already has a same-name recipe (tableId={id})",
     "cloud.created": "Created cloud recipe tableId={id}",
     "cloud.deleted": "Deleted cloud tableId={id}",

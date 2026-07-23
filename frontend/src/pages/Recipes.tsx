@@ -37,11 +37,13 @@ import {
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
 import { isCoffeeContent } from "../lib/recipeDomain";
+import { importCloudBrewRecords } from "../lib/localHistory";
 import {
   CLOUD_DELETE_CONFIRM,
   CLOUD_WRITE_CONFIRM,
   CloudError,
   deleteCloudRecipe,
+  fetchCloudBrewRecords,
   pushCloudRecipe,
   syncAccountCatalog,
   updateCloudRecipe,
@@ -145,11 +147,28 @@ export default function Recipes() {
       const imported = importCloudSyncTargets(result.targets, result.region);
       const total = imported.stats.reduce((s, x) => s + x.imported, 0);
       const candidates = imported.stats.reduce((s, x) => s + x.candidates, 0);
+      // Also pull account brew journal into local history (best-effort).
+      let historyNote = "";
+      try {
+        const hist = await fetchCloudBrewRecords({
+          email,
+          password,
+          region,
+          languageType: readAccountPrefs().languageType,
+        });
+        const merged = importCloudBrewRecords(hist.records, hist.region);
+        historyNote = t("cloud.syncHistoryNote")
+          .replace("{imported}", String(merged.imported))
+          .replace("{updated}", String(merged.updated));
+      } catch {
+        historyNote = t("cloud.syncHistoryFailed");
+      }
       setInfo(
         t("cloud.syncDone")
           .replace("{imported}", String(total))
           .replace("{candidates}", String(candidates))
-          .replace("{region}", result.region),
+          .replace("{region}", result.region) +
+          (historyNote ? ` · ${historyNote}` : ""),
       );
     });
 
