@@ -27,6 +27,10 @@ import {
   type BridgeState,
 } from "../api";
 import {
+  BrewConfirmDialog,
+  type BrewTarget,
+} from "../components/BrewConfirmDialog";
+import {
   Alert,
   Button,
   IconButton,
@@ -36,6 +40,9 @@ import {
   StatusPill,
 } from "../components/ui";
 import { classifyOperationalError } from "../lib/apiErrors";
+import { isStaticDeploy } from "../lib/deploy";
+import { defaultCoffeeRecipe } from "../lib/recipeDomain";
+import { useMachine } from "../machine/MachineContext";
 import {
   applyExplicitEventRearm,
   applyGapDetected,
@@ -85,6 +92,11 @@ type EventsPollOpts = {
 };
 
 export default function Dashboard() {
+  const { driver, bleSnapshot, bleSession, connectBle, disconnectBle } =
+    useMachine();
+  const webBle = driver === "web-bluetooth";
+  const staticDeploy = isStaticDeploy();
+  const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [bridge, setBridge] = useState<BridgeState | null>(null);
   const [stored, setStored] = useState<StoredWorkflow | null>(() =>
     readStoredWorkflow(),
@@ -294,6 +306,13 @@ export default function Dashboard() {
   const pollStatus = useCallback(
     async (opts?: StatusPollOpts) => {
       if (stopPollsRef.current || authStoppedRef.current) return;
+      // Static Pages: no bridge HTTP — skip poll noise.
+      if (isStaticDeploy()) {
+        setLoading(false);
+        setObserveHealth("ok");
+        setBridge(null);
+        return;
+      }
       // Queue clear intent before the in-flight guard so it survives a busy poll.
       if (opts?.clearStickyBusy) {
         clearStickyBusyPendingRef.current = true;
@@ -327,6 +346,7 @@ export default function Dashboard() {
   const pollEvents = useCallback(
     async (opts?: EventsPollOpts) => {
       if (stopPollsRef.current || authStoppedRef.current) return;
+      if (isStaticDeploy()) return;
 
       // Rearm/reset + generation bump before the in-flight guard so explicit
       // refresh invalidates the old response and the next poll starts from zero.
@@ -522,6 +542,31 @@ export default function Dashboard() {
       setActionError(null);
       setActionGuidance(null);
 
+      // Web Bluetooth path: cancel must hit the GATT session, not bridge HTTP.
+      // After a successful web-ble start the dialog navigates here; cancel must
+      // remain available while loaded/running without a bridge workflow.
+      if (webBle && action === "cancel") {
+        setActionBusy(action);
+        try {
+          await bleSession.cancelBrew();
+          setStored(readStoredWorkflow());
+        } catch (e) {
+          setActionError(e instanceof Error ? e.message : String(e));
+          setActionGuidance(
+            "Cancel over Web Bluetooth failed. Retry or disconnect from Settings.",
+          );
+        } finally {
+          if (!stopPollsRef.current) setActionBusy(null);
+        }
+        return;
+      }
+
+      if (webBle && (action === "pause" || action === "resume" || action === "stop" || action === "reconcile")) {
+        setActionError(`${action} is not available on Web Bluetooth yet`);
+        setActionGuidance("Use Cancel for Web Bluetooth, or switch driver to bridge.");
+        return;
+      }
+
       const resolution = resolveControlWorkflowId(
         bridgeRef.current,
         stored?.workflowId ?? trackedRef.current,
@@ -594,8 +639,24 @@ export default function Dashboard() {
         }
       }
     },
-    [ackedActiveId, actionBusy, pollEvents, pollStatus, stored?.workflowId],
+    [
+      ackedActiveId,
+      actionBusy,
+      bleSession,
+      pollEvents,
+      pollStatus,
+      stored?.workflowId,
+      webBle,
+    ],
   );
+
+  const webBleCanCancel =
+    webBle &&
+    (bleSnapshot.phase === "loading" ||
+      bleSnapshot.phase === "armed" ||
+      bleSnapshot.phase === "starting" ||
+      bleSnapshot.phase === "brewing" ||
+      bleSnapshot.loaded);
 
   // connection_scope null -> none; do not invent daemon/connected (own pills).
   const connectionScope =
@@ -664,6 +725,148 @@ export default function Dashboard() {
           </p>
         </Link>
       </div>
+
+      {webBle ? (
+        <Panel title="Web Bluetooth" className="mb-4">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-1.5">
+              <StatusPill
+                tone={
+                  bleSnapshot.phase === "connected" ||
+                  bleSnapshot.phase === "armed" ||
+                  bleSnapshot.phase === "brewing" ||
+                  bleSnapshot.phase === "starting" ||
+                  bleSnapshot.phase === "loading"
+                    ? "green"
+                    : bleSnapshot.phase === "error"
+                      ? "red"
+                      : "neutral"
+                }
+              >
+                {bleSnapshot.phase}
+              </StatusPill>
+              {bleSnapshot.machineStateName ? (
+                <StatusPill tone="blue">{bleSnapshot.machineStateName}</StatusPill>
+              ) : null}
+              {bleSnapshot.loaded ? (
+                <StatusPill tone="amber">recipe loaded</StatusPill>
+              ) : null}
+            </div>
+            <dl className="grid gap-2 text-sm sm:grid-cols-2">
+              <FieldRow
+                label="Device"
+                value={
+                  bleSnapshot.deviceName ||
+                  bleSnapshot.deviceId ||
+                  "Not connected"
+                }
+              />
+              <FieldRow
+                label="Cup weight"
+                value={
+                  bleSnapshot.cupWeightG != null
+                    ? `${bleSnapshot.cupWeightG} g`
+                    : "-"
+                }
+              />
+              <FieldRow
+                label="Dispensed water"
+                value={
+                  bleSnapshot.dispensedWaterMl != null
+                    ? `${bleSnapshot.dispensedWaterMl} ml`
+                    : "-"
+                }
+              />
+              <FieldRow
+                label="Notify frames"
+                value={String(bleSnapshot.notifyCount)}
+              />
+            </dl>
+            <p className="text-xs text-ink-muted">
+              After a Web Bluetooth start you land here. Cancel uses GATT cancel
+              (not the bridge). Close the official App while connected.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {bleSnapshot.phase === "idle" ||
+              bleSnapshot.phase === "disconnected" ||
+              bleSnapshot.phase === "error" ||
+              bleSnapshot.phase === "terminal" ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => {
+                    setActionError(null);
+                    void connectBle().catch((e) =>
+                      setActionError(
+                        e instanceof Error ? e.message : String(e),
+                      ),
+                    );
+                  }}
+                >
+                  Connect Studio
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => {
+                    void disconnectBle().catch((e) =>
+                      setActionError(
+                        e instanceof Error ? e.message : String(e),
+                      ),
+                    );
+                  }}
+                >
+                  Disconnect
+                </Button>
+              )}
+              <Button
+                variant="success"
+                size="sm"
+                disabled={actionBusy !== null}
+                onClick={() =>
+                  setBrewTarget({
+                    recipeRevisionId: "local:sample-hot-v1",
+                    content: defaultCoffeeRecipe(),
+                    recipeName: "Sample pour-over (local)",
+                  })
+                }
+              >
+                Brew sample coffee
+              </Button>
+              {webBleCanCancel ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => void runControl("cancel")}
+                >
+                  <XCircle className="h-3.5 w-3.5" aria-hidden />
+                  {actionBusy === "cancel" ? "Cancelling..." : "Cancel brew"}
+                </Button>
+              ) : null}
+            </div>
+            {staticDeploy ? (
+              <p className="text-xs text-ink-muted">
+                Static GitHub Pages build: catalog/design/history need a local
+                backend. Web Bluetooth connect + sample brew work in Chrome near
+                the machine.
+              </p>
+            ) : null}
+          </div>
+        </Panel>
+      ) : null}
+
+      <BrewConfirmDialog
+        open={brewTarget != null}
+        target={brewTarget}
+        onClose={() => setBrewTarget(null)}
+        onStarted={() => {
+          setBrewTarget(null);
+        }}
+      />
 
       {busyExternalBanner ? (
         <Alert tone="amber" title="Device busy (external)" className="mb-4">

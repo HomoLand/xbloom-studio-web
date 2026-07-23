@@ -17,10 +17,11 @@ import {
   type AuthSessionResponse,
   type SessionInfo,
 } from "../api";
+import { isStaticDeploy } from "../lib/deploy";
 
 export type AuthStatus =
   | "loading"
-  | "ready" // loopback, or LAN authenticated
+  | "ready" // loopback, or LAN authenticated, or static Pages
   | "needs_pairing" // LAN, no session
   | "error";
 
@@ -28,7 +29,7 @@ type AuthContextValue = {
   status: AuthStatus;
   config: AuthConfig | null;
   session: SessionInfo | null;
-  mode: "loopback" | "lan" | null;
+  mode: "loopback" | "lan" | "static" | null;
   error: string | null;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
@@ -41,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
-  const [mode, setMode] = useState<"loopback" | "lan" | null>(null);
+  const [mode, setMode] = useState<"loopback" | "lan" | "static" | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Prevent overlapping refresh storms from concurrent 401s. */
   const refreshingRef = useRef(false);
@@ -77,6 +78,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshingRef.current = true;
     setError(null);
     try {
+      // GitHub Pages / static SPA: no FastAPI host — enter app for Web Bluetooth.
+      if (isStaticDeploy()) {
+        setConfig(null);
+        setSession(null);
+        setMode("static");
+        setStatus("ready");
+        resetAuthExpiredGuard();
+        return;
+      }
+
       const cfg = await api.authConfig();
       setConfig(cfg);
 

@@ -2,6 +2,27 @@
 
 独立 Web UI，用于通过浏览器操作 xBloom Studio 咖啡/茶冲煮设备。与 [xbloom-studio-brew](../xbloom-studio-brew) 的 Agent Skill 共享核心逻辑，但作为独立子项目存在。
 
+## GitHub Pages (static Web Bluetooth)
+
+Live SPA (Chrome + Web Bluetooth, no local backend):
+
+**https://homoland.github.io/xbloom-studio-web/**
+
+- Deployed by `.github/workflows/pages.yml` on push to `master` / `main` / `codex/roadmap-completion`.
+- Build flags: `VITE_STATIC=1`, `VITE_BASE=/xbloom-studio-web/`.
+- Use **Dashboard → Connect Studio / Brew sample coffee**. Catalog design/history still need a local backend.
+
+## Machine drivers (progressive)
+
+| Driver | How control works | Status |
+| --- | --- | --- |
+| **web-bluetooth** | Browser → Chrome Web Bluetooth → BLE | **Default when usable** (Chrome + secure context). Coffee load/start/cancel + live status. |
+| **bridge** | Browser → local HTTP API → `xbloom-bridge` → BLE | Legacy / advanced; always selectable. Required for tea and full multi-workflow bridge features. |
+
+Preference is stored in `localStorage` (`xbloom.machineDriver`). Protocol framing, load builders, and notify decode live under `frontend/src/ble/` with golden vectors against brew `packages/core/xbloom_ble`. Design doc: brew `docs/ADR-WEB-BLUETOOTH.md` (W0–W4).
+
+Safety: Web Bluetooth start still requires typing `cup-filter-water-beans` (coffee) before load+start. Close the official App while using Web Bluetooth.
+
 ## 架构
 
 - **backend/** — FastAPI HTTP API + MCP server，复用 `xbloom-studio-core`（BLE 协议、配方校验、目录、历史）和桥接守护进程。

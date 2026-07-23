@@ -65,11 +65,15 @@ export default function App() {
   );
 }
 
-function UnauthenticatedGate({ mode }: { mode: "loopback" | "lan" | null }) {
+function UnauthenticatedGate({
+  mode,
+}: {
+  mode: "loopback" | "lan" | "static" | null;
+}) {
   return (
     <div className="mx-auto flex min-h-full max-w-md flex-col justify-center px-4 py-10">
       <img
-        src="/studio-machine.png"
+        src={`${import.meta.env.BASE_URL}studio-machine.png`}
         alt=""
         className="mx-auto mb-5 h-24 w-auto opacity-85"
         draggable={false}

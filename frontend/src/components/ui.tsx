@@ -354,7 +354,7 @@ export function EmptyState({
     <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
       {showMachine ? (
         <img
-          src="/studio-machine.png"
+          src={`${import.meta.env.BASE_URL}studio-machine.png`}
           alt=""
           className="mb-5 h-28 w-auto opacity-80 sm:h-36"
           draggable={false}
