@@ -762,9 +762,9 @@ export default function Dashboard() {
             <div className="overflow-hidden rounded-2xl bg-surface-2">
               <div className="flex flex-col items-center px-4 pb-2 pt-6">
                 <img
-                  src={`${import.meta.env.BASE_URL}studio-machine.png`}
-                  alt=""
-                  className="h-36 w-auto opacity-95 drop-shadow-[0_16px_40px_rgba(0,0,0,0.55)] sm:h-44"
+                  src={`${import.meta.env.BASE_URL}studio-machine-close.webp`}
+                  alt="xBloom Studio"
+                  className="h-40 w-auto object-contain opacity-95 drop-shadow-[0_16px_40px_rgba(0,0,0,0.55)] sm:h-48"
                   draggable={false}
                 />
                 <div className="mt-3 text-center">
@@ -1495,9 +1495,9 @@ function EmptyMachineHint({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? "" : "py-2"}>
       <img
-        src="/studio-machine.png"
-        alt=""
-        className={`mx-auto opacity-75 ${compact ? "h-16" : "h-24"} w-auto`}
+        src={`${import.meta.env.BASE_URL}studio-machine.png`}
+        alt="xBloom Studio"
+        className={`mx-auto opacity-90 ${compact ? "h-16" : "h-24"} w-auto`}
         draggable={false}
       />
     </div>

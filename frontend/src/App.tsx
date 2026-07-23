@@ -76,8 +76,8 @@ function UnauthenticatedGate({
     <div className="mx-auto flex min-h-full max-w-md flex-col justify-center px-4 py-10">
       <img
         src={`${import.meta.env.BASE_URL}studio-machine.png`}
-        alt=""
-        className="mx-auto mb-5 h-24 w-auto opacity-85"
+        alt="xBloom Studio"
+        className="mx-auto mb-5 h-28 w-auto object-contain opacity-95"
         draggable={false}
       />
       <h1 className="text-center text-lg font-semibold text-ink">xBloom Studio</h1>

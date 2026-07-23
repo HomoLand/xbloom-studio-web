@@ -81,6 +81,7 @@ export default function Pair() {
       <div className="mb-6 text-center">
         <img
           src={`${import.meta.env.BASE_URL}studio-machine.png`}
+          {/* official product photography */}
           alt=""
           className="mx-auto mb-4 h-24 w-auto opacity-85"
           draggable={false}

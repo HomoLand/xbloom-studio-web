@@ -373,8 +373,8 @@ export function EmptyState({
       {showMachine ? (
         <img
           src={`${import.meta.env.BASE_URL}studio-machine.png`}
-          alt=""
-          className="mb-6 h-32 w-auto opacity-90 drop-shadow-[0_12px_40px_rgba(0,0,0,0.45)] sm:h-40"
+          alt="xBloom Studio"
+          className="mb-6 h-32 w-auto object-contain opacity-95 drop-shadow-[0_12px_40px_rgba(0,0,0,0.45)] sm:h-40"
           draggable={false}
         />
       ) : null}
