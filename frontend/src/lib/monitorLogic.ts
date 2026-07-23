@@ -320,11 +320,75 @@ export type BleReleaseLabel =
   | { kind: "none"; text: null };
 
 /**
+ * Parse bridge/status timestamps that may be epoch seconds, epoch ms, or ISO.
+ * Returns milliseconds since epoch, or null when unparseable.
+ */
+export function parseBridgeTimeMs(
+  value: string | number | null | undefined,
+): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    // Heuristic: values below 1e12 are seconds; larger are milliseconds.
+    return value < 1e12 ? value * 1000 : value;
+  }
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return n < 1e12 ? n * 1000 : n;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Whether last_disconnect_error should apply to the *current* durable terminal.
+ *
+ * Correlation rule:
+ * - Prefer last_disconnect_time vs workflow terminal_at (or opts.terminalFinishedAt).
+ * - Disconnect strictly before the current terminal is stale (prior workflow) and
+ *   must not poison a later successful release.
+ * - Unknown times with a present error: fail closed (treat as current failure).
+ * - Disconnect at/after terminal time (within a small clock skew): current.
+ */
+export function isDisconnectErrorForCurrentTerminal(
+  bridge: BridgeState | null | undefined,
+  summary: WorkflowSummary | null,
+  opts?: { terminalFinishedAt?: string | number | null },
+): boolean {
+  const err = asTrimmedString(bridge?.last_disconnect_error);
+  if (!err) return false;
+
+  const disconnectMs = parseBridgeTimeMs(bridge?.last_disconnect_time ?? null);
+  const terminalMs =
+    parseBridgeTimeMs(opts?.terminalFinishedAt ?? null) ??
+    parseBridgeTimeMs(summary?.terminal_at ?? null);
+
+  // Unknown correlation: conservatively treat error as belonging to current terminal.
+  if (disconnectMs == null || terminalMs == null) {
+    return true;
+  }
+
+  // Allow small clock skew (2s) so terminal+release in the same second still matches.
+  const SKEW_MS = 2000;
+  if (disconnectMs + SKEW_MS < terminalMs) {
+    // Disconnect finished before this terminal existed -> prior workflow.
+    return false;
+  }
+  return true;
+}
+
+/**
  * Say "BLE released" only when durable terminal exists AND bridge status is
- * present with connected === false, release_pending === false, and no release
- * error. Undefined/unknown optional fields must never coerce to "released".
+ * present with connected === false, release_pending === false, and no *current*
+ * release error. Undefined/unknown optional fields must never coerce to "released".
  * If terminal durable but release pending/connected/unknown: finishing.
- * If release failed: action complete but BLE release failed.
+ * If release failed for this terminal: action complete but BLE release failed.
+ *
+ * Prior-workflow last_disconnect_error must not poison a later terminal that
+ * has connected=false and release_pending=false (correlate via times).
  *
  * A durable terminal event is proof of terminal even when status.workflow has
  * not refreshed yet (finishing until release fields explicitly confirm).
@@ -332,7 +396,11 @@ export type BleReleaseLabel =
 export function bleReleaseLabel(
   bridge: BridgeState | null | undefined,
   summary: WorkflowSummary | null,
-  opts?: { terminalEventProof?: boolean },
+  opts?: {
+    terminalEventProof?: boolean;
+    /** Prefer terminal event finished_at when status.workflow.terminal_at lags. */
+    terminalFinishedAt?: string | number | null;
+  },
 ): BleReleaseLabel {
   if (!hasDurableTerminal(bridge, summary, opts)) {
     return { kind: "none", text: null };
@@ -345,8 +413,11 @@ export function bleReleaseLabel(
     };
   }
 
-  const releaseError = asTrimmedString(bridge.last_disconnect_error);
-  if (releaseError) {
+  if (
+    isDisconnectErrorForCurrentTerminal(bridge, summary, {
+      terminalFinishedAt: opts?.terminalFinishedAt ?? null,
+    })
+  ) {
     return {
       kind: "failed",
       text: "Action complete, but BLE release failed",

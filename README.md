@@ -283,6 +283,69 @@ python mcp_server.py
 
 硬件类 MCP 工具经 `TypedBridgeClient` 在调用时 ensure 兼容的 bridge 进程（不连接 BLE）；`xbloom_status` / `xbloom_events` **不** ensure。被动 `xbloom_scan` 不依赖 daemon。若 daemon 非 `client_ready` / 协议不兼容，工具返回带 `category` 的错误，不强制打断进行中的活动。
 
+## Playwright E2E（Phase C9）
+
+确定性端到端测试：对**生产构建的 React SPA** + **真实 FastAPI / 安全中间件 / SQLite 路由**做浏览器集成；**只伪造 design provider 与类型化 bridge**。不用浏览器 `route` 拦截冒充后端集成，不启动真实 xBloom bridge、不扫描 BLE、不触碰硬件、不调用真实 CLP/LLM。
+
+### 命令
+
+```powershell
+# 前置：backend venv 已装 requirements-dev.txt（含 core）；sibling knowledge 可用
+cd frontend
+pnpm install
+pnpm build
+pnpm exec playwright install chromium   # 首次或浏览器缺失时
+pnpm test:e2e
+```
+
+可选环境变量（均由 `playwright.config.ts` 提供默认值）：
+
+| 变量 | 含义 | 默认 |
+|---|---|---|
+| `XBLOOM_E2E_PORT` | E2E 服务端口 | `18901` |
+| `XBLOOM_E2E_TOKEN` | 控制面 header `X-XBloom-E2E-Token` | 本地固定测试 token |
+| `XBLOOM_E2E_PUBLIC_HOST` | 模拟 LAN public host | `studio.e2e.local` |
+| `XBLOOM_E2E_STATE_DIR` | 隔离 `XBLOOM_STATE_DIR` | OS temp 下 `xbloom-studio-web-e2e-<pid>-<timestamp>`（每次 run 独立；可显式覆盖） |
+| `XBLOOM_E2E_PYTHON` | 后端解释器 | `backend/.venv/Scripts/python.exe` |
+| `XBLOOM_KNOWLEDGE_DEV_ROOT` | knowledge 开发根 | sibling brew skill 路径 |
+
+工件目录（已在 `.gitignore`）：`frontend/test-results/`、`frontend/playwright-report/`。
+
+### 假边界架构
+
+```
+Playwright (Chromium)
+  |  HTTPS + host-resolver-rules(MAP studio.e2e.local -> 127.0.0.1)
+  v
+python -m e2e.launcher   # 仅测试入口；生产 main:app / python -m serve 永不 import
+  |
+  +-- create_app(web_config=LAN, auth_store=temp SQLite)
+  +-- 注入 FakeOpenAICompatibleProvider -> DesignService
+  |     （收 normalized ProviderRequest；记录配置 model + 图片字节/mime；固定候选）
+  |     不走 OpenAICompatibleProvider，也不断言其 HTTP image_url body（那是 B10 单测）
+  +-- 替换 bridge_client 模块函数 -> FakeBridge（instance_id / workflow / events / release 合同）
+  +-- 挂载 /__e2e__/* 控制与 ledger（X-XBloom-E2E-Token；生产 app 不存在这些路由；不在 /api 下以免走会话门）
+  +-- 反向代理语义中间件：Host=public_host 时注入 X-Forwarded-*；Host=127.0.0.1 保持 loopback 配对引导
+  +-- 生产 frontend/dist 静态资源由 FastAPI 同进程 serve
+```
+
+约束摘要：
+
+- 每次 run 使用独立 temp `XBLOOM_STATE_DIR`（auth + recipe SQLite）。
+- 假硬件**不能**通过普通生产启动环境变量打开；必须 import 测试 launcher。
+- Fake design provider：只替换 DesignService 注入点；边界是 `ProviderRequest`（规范化后的 prompt/image bytes），**不是**真实 LLM HTTP 适配器的 wire format。
+- Fake bridge：workflow 连接跨 load/start/telemetry；确认终态后立即 release；**无**五分钟 loaded 过期；`status`/`events` 不 connect/load/start。
+- 覆盖：desktop/mobile 视口、LAN 配对、multipart 上传、领域编辑与校验、OCC 冲突、完整冲煮终态与 BLE released、刷新恢复、陈旧 workflow 确认、历史链路。
+
+手动只起 E2E 服务（调试）：
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+$env:XBLOOM_E2E_STATE_DIR = "$env:TEMP\xbloom-e2e-debug"
+python -m e2e.launcher --port 18901 --token e2e-local-token-phase-c9
+```
+
 ## 状态
 
 - Stage 1–3：只读浏览、配方详情/导入、遥测与受控冲煮、MCP 工具面。
@@ -290,3 +353,4 @@ python mcp_server.py
 - **Stage 5（Phase A9）**：HTTP/MCP 收敛到类型化 bridge 客户端；删除通用 `/api/device/call`；显式 `workflow_id` / `request_id`；probe 走 bridge；仅被动 scan 直连 discovery；无五分钟 loaded 过期；观察路径零 BLE/ensure 副作用。
 - **Stage 6（Phase B batch 1）**：`backend/design/` + `POST /api/design`（JSON/multipart）、knowledge 校验加载、OpenAI-compatible provider adapter、vision EXIF 净化 / text OCR、严格 schema + core 校验与单次 repair、provenance；未接 catalog 保存（B8/B9 后续）。
 - **Stage 7（Phase C1）**：`backend/web_security/` 网络/认证边界 — loopback 默认拒绝非本机；显式 LAN + 受信 HTTPS 反代 + 一次性配对 + 持久会话/CSRF/精确 CORS；`python -m serve` 模式感知绑定；前端配对 UI 后续阶段。
+- **Stage 8（Phase C9）**：Playwright E2E — 生产 SPA + 真实 FastAPI/安全/SQLite；仅假 design provider 与 typed bridge；desktop/mobile、LAN 配对、上传编辑 OCC、冲煮终态与恢复路径。

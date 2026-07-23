@@ -161,13 +161,6 @@ export default function Dashboard() {
     () => validControlsForPhase(phase, { recoveryRequired }),
     [phase, recoveryRequired],
   );
-  const release = useMemo(
-    () =>
-      bleReleaseLabel(bridge, summary, {
-        terminalEventProof,
-      }),
-    [bridge, summary, terminalEventProof],
-  );
   const durableTerminal = useMemo(
     () =>
       hasDurableTerminal(bridge, summary, {
@@ -193,6 +186,16 @@ export default function Dashboard() {
       allowLastOpWithoutWorkflowField,
     });
   }, [bridge, events, trackedId]);
+
+  const release = useMemo(
+    () =>
+      bleReleaseLabel(bridge, summary, {
+        terminalEventProof,
+        // Correlate last_disconnect_* with this workflow's terminal time.
+        terminalFinishedAt: finalSummary.finishedAt,
+      }),
+    [bridge, summary, terminalEventProof, finalSummary.finishedAt],
+  );
 
   useEffect(() => {
     bridgeRef.current = bridge;

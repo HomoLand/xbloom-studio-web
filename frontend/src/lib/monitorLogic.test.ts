@@ -32,6 +32,7 @@ type BridgeState = {
   connected?: boolean;
   release_pending?: boolean;
   last_disconnect_error?: string | null;
+  last_disconnect_time?: number | string | null;
   phase?: string | null;
   last_operation?: { result?: string; workflow_id?: string } | null;
 };
@@ -427,12 +428,14 @@ describe("bleReleaseLabel", () => {
     assert.equal(bleReleaseLabel(bridge as never, summary as never).kind, "finishing");
   });
 
-  it("shows failed when release error present", () => {
+  it("shows failed when release error present for current terminal", () => {
     const bridge = {
       running: true,
       connected: false,
       release_pending: false,
       last_disconnect_error: "gatt close failed",
+      // At/after terminal time -> current workflow release failure.
+      last_disconnect_time: "2026-01-01T00:00:01Z",
     } as BridgeState;
     const summary = {
       workflow_id: "wf_1",
@@ -440,6 +443,63 @@ describe("bleReleaseLabel", () => {
       terminal_at: "2026-01-01T00:00:00Z",
     };
     assert.equal(bleReleaseLabel(bridge as never, summary as never).kind, "failed");
+  });
+
+  it("ignores prior-workflow disconnect error for a later successful release", () => {
+    const bridge = {
+      running: true,
+      connected: false,
+      release_pending: false,
+      last_disconnect_error: "prior gatt close failed",
+      // Prior disconnect finished before this terminal.
+      last_disconnect_time: "2026-01-01T00:00:00Z",
+    } as BridgeState;
+    const summary = {
+      workflow_id: "wf_2",
+      state: "completed",
+      terminal_at: "2026-01-01T00:05:00Z",
+    };
+    const label = bleReleaseLabel(bridge as never, summary as never);
+    assert.equal(label.kind, "released");
+    assert.equal(label.text, "BLE released");
+  });
+
+  it("treats unknown disconnect time with error conservatively as failed", () => {
+    const bridge = {
+      running: true,
+      connected: false,
+      release_pending: false,
+      last_disconnect_error: "gatt close failed",
+      // Missing time -> fail closed for current terminal.
+      last_disconnect_time: null,
+    } as BridgeState;
+    const summary = {
+      workflow_id: "wf_1",
+      state: "completed",
+      terminal_at: "2026-01-01T00:00:00Z",
+    };
+    assert.equal(bleReleaseLabel(bridge as never, summary as never).kind, "failed");
+  });
+
+  it("uses terminalFinishedAt when summary.terminal_at lags", () => {
+    const bridge = {
+      running: true,
+      connected: false,
+      release_pending: false,
+      last_disconnect_error: "stale prior error",
+      last_disconnect_time: 1_700_000_000,
+    } as BridgeState;
+    const summary = {
+      workflow_id: "wf_new",
+      state: "completed",
+      // Missing terminal_at on summary; event finished later.
+      terminal_at: null,
+    };
+    // Disconnect before finishedAt -> ignore prior error.
+    const label = bleReleaseLabel(bridge as never, summary as never, {
+      terminalFinishedAt: 1_700_000_500,
+    });
+    assert.equal(label.kind, "released");
   });
 
   it("returns none when not terminal", () => {
