@@ -9,6 +9,7 @@ import { buildCancel, buildCommit, buildStart } from "./framing.ts";
 import {
   connectGatt,
   disconnectGatt,
+  isGattConnected,
   requestStudioDevice,
   startStatusNotifications,
   writeCommand,
@@ -77,6 +78,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class WebBleSession {
   private handles: GattHandles | null = null;
+  /** Last chosen device — allows reconnect without another picker when permitted. */
+  private device: BluetoothDevice | null = null;
   private stopNotify: (() => void) | null = null;
   private phase: SessionPhase = "idle";
   private lastError: string | null = null;
@@ -86,9 +89,12 @@ export class WebBleSession {
   private cupWeightG: number | null = null;
   private dispensedWaterMl: number | null = null;
   private loaded = false;
+  /** True while connect() is still wiring services/notify — ignore spur ious disconnects. */
+  private setupInProgress = false;
   private readonly stream = new NotificationFrameStream();
   private readonly listeners = new Set<Listener>();
   private terminalWatch: ReturnType<typeof setInterval> | null = null;
+  private onDisconnected: (() => void) | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -162,14 +168,11 @@ export class WebBleSession {
   async connect(): Promise<void> {
     await this.disconnect();
     this.setPhase("connecting");
+    this.setupInProgress = true;
     try {
       const device = await requestStudioDevice();
-      device.addEventListener("gattserverdisconnected", () => {
-        if (this.handles?.device === device) {
-          this.cleanupHandles(false);
-          this.setPhase("disconnected");
-        }
-      });
+      this.device = device;
+      this.bindDisconnectListener(device);
       this.handles = await connectGatt(device);
       this.notifyCount = 0;
       this.stream.reset();
@@ -181,10 +184,22 @@ export class WebBleSession {
       this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
         this.onNotifyChunk(dv),
       );
+      // Brief settle before first write (Windows GATT race).
+      await sleep(100);
+      if (!isGattConnected(this.handles)) {
+        // One automatic reconnect before failing the user gesture.
+        this.handles = await connectGatt(device);
+        this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
+          this.onNotifyChunk(dv),
+        );
+        await sleep(100);
+      }
       // Post-connect settle query (same idea as core load_recipe).
       await writeCommand(this.handles, buildStatusQuery());
+      this.setupInProgress = false;
       this.setPhase("connected");
     } catch (err) {
+      this.setupInProgress = false;
       this.cleanupHandles(true);
       const message =
         err instanceof BleGattError
@@ -199,9 +214,71 @@ export class WebBleSession {
 
   async disconnect(): Promise<void> {
     this.stopTerminalWatch();
+    this.setupInProgress = false;
     this.cleanupHandles(true);
+    this.unbindDisconnectListener();
+    this.device = null;
     this.loaded = false;
     this.setPhase("idle");
+  }
+
+  /**
+   * Ensure a live GATT link before a write. Reuses the last paired device
+   * (no second picker) when Chrome still remembers the permission.
+   */
+  private async ensureLinked(): Promise<void> {
+    if (isGattConnected(this.handles)) return;
+    if (!this.device) {
+      throw new BleGattError(
+        "Not connected. Tap Connect Studio first (user gesture required).",
+        "not_connected",
+      );
+    }
+    this.setupInProgress = true;
+    try {
+      if (this.stopNotify) {
+        this.stopNotify();
+        this.stopNotify = null;
+      }
+      this.handles = await connectGatt(this.device);
+      this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
+        this.onNotifyChunk(dv),
+      );
+      await sleep(80);
+      if (
+        this.phase === "idle" ||
+        this.phase === "disconnected" ||
+        this.phase === "error"
+      ) {
+        this.setPhase("connected");
+      }
+    } finally {
+      this.setupInProgress = false;
+    }
+  }
+
+  private unbindDisconnectListener(): void {
+    if (this.device && this.onDisconnected) {
+      this.device.removeEventListener(
+        "gattserverdisconnected",
+        this.onDisconnected,
+      );
+    }
+    this.onDisconnected = null;
+  }
+
+  private bindDisconnectListener(device: BluetoothDevice): void {
+    this.unbindDisconnectListener();
+    this.onDisconnected = () => {
+      if (this.setupInProgress) return;
+      if (this.handles?.device === device || this.device === device) {
+        this.cleanupHandles(false);
+        if (this.phase !== "idle" && this.phase !== "terminal") {
+          this.setPhase("disconnected");
+        }
+      }
+    };
+    device.addEventListener("gattserverdisconnected", this.onDisconnected);
   }
 
   /**
@@ -361,17 +438,31 @@ export class WebBleSession {
   }
 
   private async requireWrite(frame: Uint8Array): Promise<void> {
-    if (!this.handles) {
-      throw new BleGattError("Not connected to a machine.", "not_connected");
-    }
     if (
       this.phase === "idle" ||
-      this.phase === "disconnected" ||
       this.phase === "connecting"
     ) {
       throw new BleGattError("Not connected to a machine.", "not_connected");
     }
-    await writeCommand(this.handles, frame);
+    await this.ensureLinked();
+    if (!this.handles) {
+      throw new BleGattError("Not connected to a machine.", "not_connected");
+    }
+    try {
+      await writeCommand(this.handles, frame);
+    } catch (err) {
+      // One reconnect + retry for transient Windows disconnects mid-load.
+      if (
+        err instanceof BleGattError &&
+        (err.code === "disconnected" || /disconnected/i.test(err.message))
+      ) {
+        await this.ensureLinked();
+        if (!this.handles) throw err;
+        await writeCommand(this.handles, frame);
+        return;
+      }
+      throw err;
+    }
   }
 
   private cleanupHandles(disconnect: boolean): void {

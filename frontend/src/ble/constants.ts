@@ -15,8 +15,18 @@ export const CHAR_STATUS = "0000ffe2-0000-1000-8000-00805f9b34fb";
 /** Optional auxiliary characteristic (core may use later). */
 export const CHAR_AUX = "0000ffe3-0000-1000-8000-00805f9b34fb";
 
-/** Optional name substring filter for requestDevice (best-effort). */
-export const DEVICE_NAME_PREFIXES = ["xBloom", "xbloom", "XBloom"] as const;
+/**
+ * Advertised local-name prefixes (core uses ``XBLOOM``).
+ * Studio often does NOT put the vendor service UUID in the advertising packet,
+ * so Web Bluetooth discovery must filter by name, not only by service.
+ */
+export const DEVICE_NAME_PREFIXES = [
+  "XBLOOM",
+  "xbloom",
+  "XBloom",
+  "xBloom",
+  "Xbloom",
+] as const;
 
 export const LOAD_SEQ = 0x1f;
 export const BREW_SEQ = 0x9e;
