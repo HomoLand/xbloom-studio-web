@@ -166,17 +166,87 @@ def test_module_docs_do_not_claim_backend_never_holds_ble():
             )
 
 
-def test_requirements_pin_release_wheel_url_and_hash():
-    req = _read(BACKEND_DIR / "requirements.txt")
-    url = (
-        "https://github.com/HomoLand/xbloom-studio-brew/releases/download/"
-        "v1.2.0/xbloom_studio_core-1.2.0-py3-none-any.whl"
+# Published GitHub Release v1.2.0 artifacts (independently verified).
+# Source contracts lock wheel + knowledge together so partial drift fails tests.
+RELEASE_TAG = "v1.2.0"
+RELEASE_REPO = "HomoLand/xbloom-studio-brew"
+WHEEL_NAME = "xbloom_studio_core-1.2.0-py3-none-any.whl"
+WHEEL_SHA256 = "1ef153ba4ca6633527d30a97eb03ef5383207e5bbe763d0d53a0b8e433f008d4"
+KNOWLEDGE_NAME = "knowledge-1.2.0.zip"
+KNOWLEDGE_SHA256 = "6dc140917ab54ef4c8a0a6a64b79eeea7566434f6a00c62651a5e0fc3f3260eb"
+WHEEL_DIRECT_URL = (
+    f"https://github.com/{RELEASE_REPO}/releases/download/"
+    f"{RELEASE_TAG}/{WHEEL_NAME}"
+)
+
+
+def test_requirements_files_are_ascii_decodable():
+    """Windows pip under locale encodings (e.g. GBK) must parse requirements.
+
+    Non-ASCII comment punctuation has aborted clean-install before dependency
+    parsing; keep every backend requirements*.txt strictly ASCII.
+    """
+    paths = sorted(BACKEND_DIR.glob("requirements*.txt"))
+    assert paths, "expected backend/requirements*.txt files"
+    offenders: list[str] = []
+    for path in paths:
+        raw = path.read_bytes()
+        try:
+            raw.decode("ascii")
+        except UnicodeDecodeError as exc:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            offenders.append(f"{rel}: not ASCII-decodable ({exc})")
+    assert not offenders, "requirements files must be ASCII-only:\n" + "\n".join(
+        offenders
     )
-    sha = "9a90c781e4a9bd756f60103ef4f51d1966b83ef5be466c5cf88e7d8264b5b918"
-    assert url in req
-    assert f"#sha256={sha}" in req
+
+
+def test_requirements_pin_release_wheel_url_and_hash():
+    """Production requirements pin the release wheel with URL + #sha256=."""
+    req = _read(BACKEND_DIR / "requirements.txt")
+    assert WHEEL_DIRECT_URL in req
+    assert f"#sha256={WHEEL_SHA256}" in req
+    assert WHEEL_NAME in req
+    assert RELEASE_TAG in req
     assert "-e ../../" not in req
     assert "-r requirements-runtime.txt" in req
+    # Knowledge is not pip-installed, but the same file must pin its identity
+    # so wheel/knowledge cannot drift independently.
+    assert KNOWLEDGE_NAME in req
+    assert KNOWLEDGE_SHA256 in req
+
+
+def test_readme_pins_release_wheel_and_knowledge_artifacts():
+    """README documents wheel + knowledge name/version provenance and SHAs."""
+    readme = _read(REPO_ROOT / "README.md")
+    assert RELEASE_TAG in readme
+    assert WHEEL_NAME in readme
+    assert WHEEL_SHA256 in readme
+    assert KNOWLEDGE_NAME in readme
+    assert KNOWLEDGE_SHA256 in readme
+    # Artifact filenames must encode the same release version as the tag.
+    version = RELEASE_TAG.lstrip("v")
+    assert KNOWLEDGE_NAME == f"knowledge-{version}.zip"
+    assert WHEEL_NAME == f"xbloom_studio_core-{version}-py3-none-any.whl"
+
+
+def test_release_artifact_pins_are_consistent_across_sources():
+    """Partial drift between requirements and README must fail the contract."""
+    req = _read(BACKEND_DIR / "requirements.txt")
+    readme = _read(REPO_ROOT / "README.md")
+    for artifact_name, sha in (
+        (WHEEL_NAME, WHEEL_SHA256),
+        (KNOWLEDGE_NAME, KNOWLEDGE_SHA256),
+    ):
+        assert artifact_name in req
+        assert artifact_name in readme
+        assert sha in req
+        assert sha in readme
+    # Wheel remains direct-URL + hash-enforced in production requirements only.
+    assert WHEEL_DIRECT_URL in req
+    assert f"#sha256={WHEEL_SHA256}" in req
+    assert RELEASE_TAG in req
+    assert RELEASE_TAG in readme
 
 
 def test_requirements_dev_uses_editable_core_not_release_url():
@@ -184,6 +254,8 @@ def test_requirements_dev_uses_editable_core_not_release_url():
     assert "-e ../../xbloom-studio-brew/packages/core" in dev
     assert "releases/download/v1.2.0" not in dev
     assert "xbloom_studio_core-1.2.0" not in dev
+    assert WHEEL_DIRECT_URL not in dev
+    assert WHEEL_SHA256 not in dev
     assert "pytest" in dev
     assert "-r requirements-runtime.txt" in dev
 

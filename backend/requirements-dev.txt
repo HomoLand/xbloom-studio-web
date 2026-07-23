@@ -1,4 +1,4 @@
-# Local development install — editable core + test tools.
+# Local development install - editable core + test tools.
 # Does NOT install the GitHub release wheel (see requirements.txt for that).
 #
 # Install from the backend/ directory so the relative editable path resolves:
