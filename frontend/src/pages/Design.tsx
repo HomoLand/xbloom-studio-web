@@ -67,7 +67,7 @@ function latestClipboardImage(data: DataTransfer | null): File | null {
 }
 
 export default function Design() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { driver } = useMachine();
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -182,6 +182,7 @@ export default function Design() {
       const result = await designWithLocalAi({
         text,
         images: images.map((i) => i.file),
+        locale,
         onProgress,
       });
       setCandidate(result.content);
@@ -263,7 +264,7 @@ export default function Design() {
                   onClick={() => cameraRef.current?.click()}
                 >
                   <Camera className="h-3.5 w-3.5" aria-hidden />
-                  Camera
+                  {t("design.camera")}
                 </Button>
                 {images.length > 0 ? (
                   <Button size="sm" variant="secondary" onClick={clearImages}>

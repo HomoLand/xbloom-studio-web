@@ -18,6 +18,7 @@ import {
   storageKindOf,
 } from "../lib/recipeDomain";
 import { persistWorkflow } from "../lib/workflowStore";
+import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
 import { Alert, Button, Dialog, Field, TextInput } from "./ui";
 
@@ -41,6 +42,7 @@ type Props = {
  */
 export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState<"load" | "start" | "cancel" | null>(null);
@@ -83,7 +85,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   const brewWebBluetooth = async () => {
     if (!target || !content) return;
     if (kind === "tea" || !isCoffeeContent(content)) {
-      setError("Web Bluetooth path supports coffee recipes only in this release.");
+      setError(t("brew.coffeeOnly"));
       return;
     }
     if (confirm.trim() !== phrase) {
@@ -123,9 +125,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       onStarted(startedId, "coffee");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setRecovery(
-        "Check machine is powered, in range, and the official App is closed. Retry only if status is idle.",
-      );
+      setRecovery(t("brew.readyCheck"));
       setBusy(null);
     }
   };
@@ -245,8 +245,8 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
   if (!target || !content) {
     return (
-      <Dialog open={open} title="Brew" onClose={handleClose} busy={!!busy}>
-        <p className="text-sm text-ink-muted">No recipe revision selected.</p>
+      <Dialog open={open} title={t("brew.confirmTitle")} onClose={handleClose} busy={!!busy}>
+        <p className="text-sm text-ink-muted">{t("brew.noTarget")}</p>
       </Dialog>
     );
   }
@@ -254,26 +254,24 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   return (
     <Dialog
       open={open}
-      title="Confirm brew"
+      title={t("brew.confirmTitle")}
       onClose={handleClose}
       busy={!!busy}
       size="lg"
     >
       <div className="space-y-4">
         <p className="text-sm text-ink-muted">
-          {webBle
-            ? "Web Bluetooth: load frames go directly to the Studio (Chrome). Type the safety phrase, then load and start. Close the official App first."
-            : "Load this revision onto the machine, then start with the safety phrase."}
+          {webBle ? t("brew.webBleHint") : t("brew.bridgeHint")}
         </p>
 
         {webBle ? (
           <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-            Driver web-bluetooth | session {bleSnapshot.phase}
+            {t("settings.webBle")} · {bleSnapshot.phase}
             {bleSnapshot.machineStateName
-              ? ` | machine ${bleSnapshot.machineStateName}`
+              ? ` · ${bleSnapshot.machineStateName}`
               : ""}
             {bleSnapshot.cupWeightG != null
-              ? ` | cup ${bleSnapshot.cupWeightG} g`
+              ? ` · ${bleSnapshot.cupWeightG} g`
               : ""}
           </div>
         ) : null}
@@ -281,33 +279,23 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
         <div className="text-sm">
           <div className="font-medium text-ink">{name}</div>
           <div className="mt-1 text-xs text-ink-muted">
-            Revision <code className="text-ink">{shortId(target.recipeRevisionId, 14)}</code>
-            {" | "}
-            Kind <span className="text-ink">{kind}</span>
+            {t("brew.revision")}{" "}
+            <code className="text-ink">{shortId(target.recipeRevisionId, 14)}</code>
+            {" · "}
+            {t("brew.kind")} <span className="text-ink">{kind}</span>
           </div>
           <RecipeSnapshot content={content} />
-          {loadedWorkflowId ? (
-            <div className="mt-2 text-xs text-accent-amber">
-              Loaded workflow{" "}
-              <code className="text-ink">{shortId(loadedWorkflowId, 16)}</code>
-            </div>
-          ) : null}
         </div>
 
         {error ? <Alert tone="red">{error}</Alert> : null}
         {recovery ? (
-          <Alert
-            tone={uncertain ? "amber" : "blue"}
-            title={uncertain ? "Status" : "Next step"}
-          >
-            {recovery}
-          </Alert>
+          <Alert tone={uncertain ? "amber" : "blue"}>{recovery}</Alert>
         ) : null}
 
         <Field
-          label={`Safety phrase (${phrase})`}
+          label={`${t("brew.phrase")} (${phrase})`}
           htmlFor="brew-confirm-phrase"
-          hint="Type the phrase exactly to enable start."
+          hint={t("brew.phraseHint")}
         >
           <TextInput
             id="brew-confirm-phrase"
@@ -322,7 +310,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="secondary" onClick={handleClose} disabled={!!busy}>
-            Close
+            {t("common.close")}
           </Button>
           {webBle &&
           (bleSnapshot.loaded ||
@@ -334,7 +322,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
               onClick={() => void cancelWebBle()}
               disabled={!!busy}
             >
-              {busy === "cancel" ? "Cancelling..." : "Cancel brew"}
+              {busy === "cancel" ? t("brew.cancelling") : t("brew.cancelBrew")}
             </Button>
           ) : null}
           {!blockMutation ? (
@@ -344,12 +332,10 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
               disabled={!!busy || confirm.trim() !== phrase}
             >
               {busy === "load"
-                ? "Loading..."
+                ? t("brew.loading")
                 : busy === "start"
-                  ? "Starting..."
-                  : loadedWorkflowId
-                    ? "Start brew"
-                    : "Load and start"}
+                  ? t("brew.starting")
+                  : t("brew.loadStart")}
             </Button>
           ) : (
             <Button
@@ -361,7 +347,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
                 navigate("/");
               }}
             >
-              Go to Dashboard
+              {t("brew.goDashboard")}
             </Button>
           )}
         </div>

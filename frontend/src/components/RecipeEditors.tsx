@@ -6,6 +6,7 @@ import type {
   TeaRecipeContent,
   TempValue,
 } from "../api";
+import { useI18n } from "../i18n/I18nContext";
 import {
   defaultCoffeePour,
   defaultTeaPour,
@@ -102,6 +103,7 @@ export function CoffeeEditor({
   disabled,
   fieldErrors = {},
 }: CoffeeProps) {
+  const { t } = useI18n();
   const set = <K extends keyof CoffeeRecipeContent>(
     key: K,
     v: CoffeeRecipeContent[K],
@@ -165,7 +167,7 @@ export function CoffeeEditor({
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Name" htmlFor="coffee-name" error={fieldErrors.name} className="sm:col-span-2">
+        <Field label={t("editor.name")} htmlFor="coffee-name" error={fieldErrors.name} className="sm:col-span-2">
           <TextInput
             id="coffee-name"
             value={value.name}
@@ -174,9 +176,9 @@ export function CoffeeEditor({
           />
         </Field>
 
-        <Field label="Brew style" className="sm:col-span-2">
+        <Field label={t("editor.kind")} className="sm:col-span-2">
           <Segmented
-            ariaLabel="Brew style"
+            ariaLabel={t("editor.kind")}
             value={value.kind}
             onChange={(kind) => {
               if (kind === "flash-brew") {
@@ -191,13 +193,13 @@ export function CoffeeEditor({
               }
             }}
             options={[
-              { value: "hot", label: "Hot" },
-              { value: "flash-brew", label: "Flash brew" },
+              { value: "hot", label: t("editor.hot") },
+              { value: "flash-brew", label: t("editor.flash") },
             ]}
           />
         </Field>
 
-        <Field label="Dripper" htmlFor="coffee-dripper" error={fieldErrors.dripper}>
+        <Field label={t("editor.dripper")} htmlFor="coffee-dripper" error={fieldErrors.dripper}>
           <TextInput
             id="coffee-dripper"
             value={value.dripper ?? ""}
@@ -205,7 +207,7 @@ export function CoffeeEditor({
             onChange={(e) => set("dripper", e.target.value)}
           />
         </Field>
-        <Field label="Dose (g)" htmlFor="coffee-dose" error={fieldErrors.dose_g}>
+        <Field label={t("editor.dose")} htmlFor="coffee-dose" error={fieldErrors.dose_g}>
           <TextInput
             id="coffee-dose"
             type="number"
@@ -217,7 +219,7 @@ export function CoffeeEditor({
             onChange={(e) => set("dose_g", whole(e.target.value, value.dose_g))}
           />
         </Field>
-        <Field label="Grind" htmlFor="coffee-grind" error={fieldErrors.grind}>
+        <Field label={t("editor.grind")} htmlFor="coffee-grind" error={fieldErrors.grind}>
           <TextInput
             id="coffee-grind"
             type="number"
@@ -229,7 +231,7 @@ export function CoffeeEditor({
             onChange={(e) => set("grind", whole(e.target.value, value.grind))}
           />
         </Field>
-        <Field label="Ratio" htmlFor="coffee-ratio" error={fieldErrors.ratio}>
+        <Field label={t("editor.ratio")} htmlFor="coffee-ratio" error={fieldErrors.ratio}>
           <TextInput
             id="coffee-ratio"
             type="number"
@@ -241,7 +243,7 @@ export function CoffeeEditor({
             onChange={(e) => set("ratio", num(e.target.value, value.ratio))}
           />
         </Field>
-        <Field label="Total water (ml)" htmlFor="coffee-water" error={fieldErrors.water_ml}>
+        <Field label={t("editor.water")} htmlFor="coffee-water" error={fieldErrors.water_ml}>
           <TextInput
             id="coffee-water"
             type="number"
@@ -253,7 +255,7 @@ export function CoffeeEditor({
           />
         </Field>
         <Field
-          label="Hot water (ml)"
+          label={t("editor.hotWater")}
           htmlFor="coffee-hot-water"
           error={fieldErrors.hot_water_ml}
         >
@@ -273,7 +275,7 @@ export function CoffeeEditor({
           />
         </Field>
         {isFlash ? (
-          <Field label="Ice (g)" htmlFor="coffee-ice" error={fieldErrors.ice_g}>
+          <Field label={t("editor.ice")} htmlFor="coffee-ice" error={fieldErrors.ice_g}>
             <TextInput
               id="coffee-ice"
               type="number"
@@ -324,7 +326,7 @@ export function CoffeeEditor({
             }
           />
         </Field>
-        <Field label="Note" htmlFor="coffee-note" className="sm:col-span-2" error={fieldErrors.note}>
+        <Field label={t("editor.note")} htmlFor="coffee-note" className="sm:col-span-2" error={fieldErrors.note}>
           <TextInput
             id="coffee-note"
             value={value.note ?? ""}
@@ -338,7 +340,8 @@ export function CoffeeEditor({
       <div>
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-sm font-medium text-ink">
-            Pours <span className="text-ink-faint">({value.pours.length}/5)</span>
+            {t("editor.pours")}{" "}
+            <span className="text-ink-faint">({value.pours.length}/5)</span>
           </h3>
           <Button
             size="sm"
@@ -347,7 +350,7 @@ export function CoffeeEditor({
             onClick={addPour}
           >
             <Plus className="h-3.5 w-3.5" aria-hidden />
-            Add pour
+            {t("editor.addPour")}
           </Button>
         </div>
         <div className="space-y-2">
@@ -400,6 +403,7 @@ function PourRowCoffee({
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
 }) {
+  const { t } = useI18n();
   const isCenter = pour.pattern === "center";
   const rpmMin = isCenter ? 0 : 60;
   const rpmMax = isCenter ? 0 : 120;
@@ -407,36 +411,38 @@ function PourRowCoffee({
   return (
     <div className="rounded-lg border border-line bg-paper p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-ink-muted">Pour {index + 1}</span>
+        <span className="text-xs font-medium text-ink-muted">
+          {t("editor.pours")} {index + 1}
+        </span>
         <div className="flex items-center gap-0.5">
           <IconButton
-            label="Move pour up"
+            label="↑"
             disabled={disabled || !canMoveUp}
             onClick={() => onMove(-1)}
           >
             <ArrowUp className="h-3.5 w-3.5" aria-hidden />
           </IconButton>
           <IconButton
-            label="Move pour down"
+            label="↓"
             disabled={disabled || !canMoveDown}
             onClick={() => onMove(1)}
           >
             <ArrowDown className="h-3.5 w-3.5" aria-hidden />
           </IconButton>
-          <IconButton label="Remove pour" disabled={disabled || !canRemove} onClick={onRemove}>
+          <IconButton label={t("design.removeImage")} disabled={disabled || !canRemove} onClick={onRemove}>
             <Trash2 className="h-3.5 w-3.5" aria-hidden />
           </IconButton>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Field label="Label">
+        <Field label={t("editor.pourLabel")}>
           <TextInput
             value={pour.label ?? ""}
             disabled={disabled}
             onChange={(e) => onChange({ label: e.target.value })}
           />
         </Field>
-        <Field label="ml">
+        <Field label={t("editor.ml")}>
           <TextInput
             type="number"
             min={10}
@@ -446,14 +452,14 @@ function PourRowCoffee({
             onChange={(e) => onChange({ ml: num(e.target.value, pour.ml) })}
           />
         </Field>
-        <Field label="Temp">
+        <Field label={t("editor.temp")}>
           <TextInput
             value={tempInputValue(pour.temp_c)}
             disabled={disabled}
             onChange={(e) => onChange({ temp_c: parseTemp(e.target.value) })}
           />
         </Field>
-        <Field label="Pattern">
+        <Field label={t("editor.pattern")}>
           <Select
             value={pour.pattern}
             disabled={disabled}
@@ -472,7 +478,7 @@ function PourRowCoffee({
             ))}
           </Select>
         </Field>
-        <Field label="Pause (s)">
+        <Field label={t("editor.pause")}>
           <TextInput
             type="number"
             min={0}
@@ -483,8 +489,8 @@ function PourRowCoffee({
           />
         </Field>
         <Field
-          label="RPM"
-          hint={isCenter ? "0 only (center)" : "60-120, step 10"}
+          label={t("editor.rpm")}
+          hint={isCenter ? "0 (center)" : "60-120"}
         >
           <TextInput
             type="number"
@@ -498,7 +504,7 @@ function PourRowCoffee({
             }
           />
         </Field>
-        <Field label="Flow ml/s">
+        <Field label={t("editor.flow")}>
           <TextInput
             type="number"
             min={3}
@@ -511,7 +517,7 @@ function PourRowCoffee({
             }
           />
         </Field>
-        <Field label="Vibration">
+        <Field label={t("editor.vibration")}>
           <Select
             value={pour.vibration ?? "none"}
             disabled={disabled}

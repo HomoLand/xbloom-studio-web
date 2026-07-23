@@ -220,30 +220,26 @@ export default function Settings() {
                 {t("settings.clearAi")}
               </Button>
               <StatusPill tone={isAiConfigured(aiForm) ? "green" : "neutral"}>
-                {isAiConfigured(aiForm) ? "configured" : "not set"}
+                {isAiConfigured(aiForm)
+                  ? t("settings.configured")
+                  : t("settings.notSet")}
               </StatusPill>
             </div>
           </div>
         </Panel>
 
         <Panel title={t("settings.driver")}>
-          <p className="mb-3 text-sm text-ink-muted">
-            Progressive path (ADR-WEB-BLUETOOTH): local Python bridge (legacy) or
-            Chrome Web Bluetooth near-field control. When Web Bluetooth is
-            available, it is the default for new browsers; bridge remains
-            selectable. Coffee load/start/cancel use Web Bluetooth when that
-            driver is active (tea still uses bridge).
-          </p>
+          <p className="mb-3 text-sm text-ink-muted">{t("settings.driverHint")}</p>
           <div className="flex flex-wrap gap-2">
             {(
               [
                 {
                   id: "bridge" as MachineDriver,
-                  label: "Bridge (local daemon)",
+                  label: t("settings.bridge"),
                 },
                 {
                   id: "web-bluetooth" as MachineDriver,
-                  label: "Web Bluetooth (Chrome)",
+                  label: t("settings.webBle"),
                 },
               ] as const
             ).map((opt) => {
@@ -261,30 +257,32 @@ export default function Settings() {
             })}
           </div>
           <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-            <Row label="Active driver" value={driver} />
+            <Row label={t("settings.activeDriver")} value={driver} />
             <Row
-              label="Web Bluetooth"
+              label={t("settings.webBleAvail")}
               value={
                 webBluetooth.usable
-                  ? "Available"
-                  : webBluetooth.reason ?? "Unavailable"
+                  ? t("settings.available")
+                  : webBluetooth.reason ?? t("settings.unavailable")
               }
             />
-            <Row label="BLE session" value={bleSnapshot.phase} />
+            <Row label={t("settings.bleSession")} value={bleSnapshot.phase} />
             <Row
-              label="Device"
+              label={t("dashboard.device")}
               value={
                 bleSnapshot.deviceName ||
                 bleSnapshot.deviceId ||
-                (driver === "web-bluetooth" ? "Not connected" : "—")
+                (driver === "web-bluetooth"
+                  ? t("dashboard.notConnected")
+                  : "—")
               }
             />
             <Row
-              label="Machine phase"
+              label={t("dashboard.phase")}
               value={bleSnapshot.machineStateName ?? "—"}
             />
             <Row
-              label="Cup weight"
+              label={t("dashboard.cup")}
               value={
                 bleSnapshot.cupWeightG != null
                   ? `${bleSnapshot.cupWeightG} g`
@@ -292,7 +290,7 @@ export default function Settings() {
               }
             />
             <Row
-              label="Dispensed water"
+              label={t("dashboard.water")}
               value={
                 bleSnapshot.dispensedWaterMl != null
                   ? `${bleSnapshot.dispensedWaterMl} ml`
@@ -313,7 +311,7 @@ export default function Settings() {
                     setBleActionError(null);
                   }}
                 >
-                  Cancel connecting
+                  {t("settings.cancelConnecting")}
                 </Button>
               ) : (
                 <Button
@@ -336,8 +334,8 @@ export default function Settings() {
                 >
                   <Bluetooth className="h-3.5 w-3.5" aria-hidden />
                   {bleSnapshot.phase === "connected"
-                    ? "Reconnect"
-                    : "Connect Studio"}
+                    ? t("settings.reconnect")
+                    : t("settings.connect")}
                 </Button>
               )}
               <Button
@@ -361,7 +359,7 @@ export default function Settings() {
                     .finally(() => setBleBusy(false));
                 }}
               >
-                Disconnect
+                {t("settings.disconnect")}
               </Button>
               <Button
                 size="sm"
