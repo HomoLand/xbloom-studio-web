@@ -176,11 +176,53 @@ $env:XBLOOM_DESIGN_MODE = "vision"
 - **输出**：最多一次受约束的结构修复；仍非法时返回可编辑候选 + 字段级错误 + `valid=false`，不保存。
 - **provenance**：含 provider/model、knowledge version/hash、prompt template version、candidate hash；不含 API key、原始图片、思维链或任意本机路径。
 
-## 安全约束
+## 网络安全与配对（Phase C1）
 
-- Backend 只监听 `127.0.0.1`，不暴露到公网或局域网。
-- 涉及加热/电机的操作遵循 Skill 的安全模型（owner gate + 确认短语）。
-- 不做内网穿透、端口映射、公网暴露。
+默认 **loopback 模式**：只接受本机环回客户端（`127.0.0.0/8` / `::1`）。应用层拒绝非 loopback 对端；**不**对公网开放。
+
+可选 **LAN 模式**（显式配置）：仅允许已信任的 HTTPS 反向代理作为直连对端，固定唯一 `XBLOOM_PUBLIC_ORIGIN`，一次性配对 + 可撤销会话 + CSRF + 精确 CORS。不做证书签发，不做公网模式。配对/会话路径**不**触碰 BLE。
+
+### 配置
+
+| 变量 | 用途 | 默认 |
+|---|---|---|
+| `XBLOOM_WEB_MODE` | `loopback` 或 `lan` | `loopback` |
+| `XBLOOM_PUBLIC_ORIGIN` | LAN 必需：唯一精确 `https` origin（无 path/query/fragment/通配/userinfo） | 无 |
+| `XBLOOM_TRUSTED_PROXIES` | LAN 必需：精确 IP/CIDR 列表（逗号分隔） | 无 |
+| `XBLOOM_SESSION_TTL_S` | 会话 TTL（秒，有上下界） | `604800`（7 天） |
+| `XBLOOM_PAIRING_TTL_S` | 配对 token TTL（秒） | `300` |
+| `XBLOOM_PAIRING_RATE_LIMIT_MAX` | 无效配对尝试次数上限（按客户端 IP，持久化） | `10` |
+| `XBLOOM_PAIRING_RATE_LIMIT_WINDOW_S` | 配对限速窗口（秒） | `900` |
+| `XBLOOM_BIND_HOST` | 监听地址（middleware 仍是策略边界） | loopback/`lan` 默认 `127.0.0.1` |
+| `XBLOOM_BIND_PORT` | 监听端口 | `8000` |
+
+```powershell
+# 默认 loopback（本机）
+cd backend
+.venv\Scripts\Activate.ps1
+python -m serve
+# 等价：uvicorn main:app --host 127.0.0.1 --port 8000
+
+# LAN（仅示例占位：换成你自己的本地域名与反向代理 IP；勿提交真实域名）
+$env:XBLOOM_WEB_MODE = "lan"
+$env:XBLOOM_PUBLIC_ORIGIN = "https://YOUR_LOCAL_HOSTNAME"
+$env:XBLOOM_TRUSTED_PROXIES = "127.0.0.1/32,YOUR_PROXY_IP/32"
+python -m serve
+```
+
+### 行为摘要
+
+- **loopback**：正常 `/api/*` 无需配对；`GET /api/auth/config` 如实报告 `mode=loopback`。CORS 仅为精确的本机开发 origin（无通配）。
+- **LAN**：直连对端必须是 loopback（本机引导）或 `XBLOOM_TRUSTED_PROXIES` 中的代理。仅信任来自该代理的 `X-Forwarded-*`；要求 `X-Forwarded-Proto: https` 与精确的 `X-Forwarded-Host`。浏览器 `Origin` 必须匹配 public origin。
+- **配对**：`POST /api/auth/pairing/new` 仅允许本机 loopback 引导，或已认证 + CSRF 的 LAN 会话。`POST /api/auth/pair` 是唯一的未认证 LAN 写操作（一次性 token → 会话 cookie）。
+- **会话**：HttpOnly + Secure（LAN）+ SameSite=Strict 的会话 cookie；可变请求需会话绑定的 `X-CSRF-Token` 双提交。支持列表 / 撤销 / 登出。
+- **存储**：SQLite（WAL）位于解析后的 xBloom state 目录下 `web/web_auth.sqlite3`，只存 hash，不记 secret。
+
+### 安全约束
+
+- 默认只绑定 loopback；LAN 仍要求受信 HTTPS 反向代理，**不做**内网穿透、端口映射或公网暴露。
+- 不把 `client_name`、`Origin`、`Host` 或单独 cookie 当作授权。
+- 涉及加热/电机的操作仍遵循 Skill 的安全模型（owner gate + 确认短语）。
 
 ## MCP Server
 
@@ -240,3 +282,4 @@ python mcp_server.py
 - Stage 4（Phase 0.6）：Web 使用 core `ensure_bridge_daemon()`；发布 pin GitHub wheel v1.2.0。
 - **Stage 5（Phase A9）**：HTTP/MCP 收敛到类型化 bridge 客户端；删除通用 `/api/device/call`；显式 `workflow_id` / `request_id`；probe 走 bridge；仅被动 scan 直连 discovery；无五分钟 loaded 过期；观察路径零 BLE/ensure 副作用。
 - **Stage 6（Phase B batch 1）**：`backend/design/` + `POST /api/design`（JSON/multipart）、knowledge 校验加载、OpenAI-compatible provider adapter、vision EXIF 净化 / text OCR、严格 schema + core 校验与单次 repair、provenance；未接 catalog 保存（B8/B9 后续）。
+- **Stage 7（Phase C1）**：`backend/web_security/` 网络/认证边界 — loopback 默认拒绝非本机；显式 LAN + 受信 HTTPS 反代 + 一次性配对 + 持久会话/CSRF/精确 CORS；`python -m serve` 模式感知绑定；前端配对 UI 后续阶段。

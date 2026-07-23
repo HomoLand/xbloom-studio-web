@@ -5,12 +5,18 @@ control, recipe validation, catalog, history) over HTTP for the browser
 frontend.
 
 Startup ensures the bridge daemon process without connecting BLE. Hardware
-actions go through the typed Web adapter (``bridge_client`` → core
+actions go through the typed Web adapter (``bridge_client`` -> core
 ``TypedBridgeClient``); only passive scan uses BLE discovery directly. Probe
 is a bridge one-shot. Shutdown never stops the independent daemon.
 
+Network/auth (Phase C1): default mode is loopback-only. LAN mode requires a
+trusted HTTPS reverse proxy, exact public origin, pairing, sessions, and CSRF.
+See README and ``web_security`` for configuration.
+
 Run from the backend directory:
 
+    python -m serve
+    # or:
     uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 Prerequisites:
@@ -44,6 +50,16 @@ from design.routes import (
     router as design_router,
 )
 from routes import catalog, device, history, recipes
+from web_security import (
+    CORS_ALLOW_HEADERS,
+    CORS_ALLOW_METHODS,
+    AuthStore,
+    WebSecurityConfig,
+    WebSecurityMiddleware,
+    auth_router,
+    install_security_exception_handlers,
+    load_web_security_config,
+)
 from xbloom_ble.bridge import ensure_bridge_daemon
 
 
@@ -141,61 +157,85 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await close_design_service()
 
 
-app = FastAPI(
-    title="xBloom Studio Web",
-    description="Local web control surface for the xBloom Studio Skill.",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+def create_app(
+    *,
+    web_config: WebSecurityConfig | None = None,
+    auth_store: AuthStore | None = None,
+    lifespan_handler=lifespan,
+) -> FastAPI:
+    """Application factory (preferred for tests; ``main.app`` remains the default).
+
+    Inject ``web_config`` / ``auth_store`` to avoid cross-test global env leakage.
+    """
+
+    config = web_config if web_config is not None else load_web_security_config()
+    # Default store re-resolves XBLOOM_STATE_DIR on use (no import-time path pin).
+    store = auth_store if auth_store is not None else AuthStore()
+
+    application = FastAPI(
+        title="xBloom Studio Web",
+        description="Local web control surface for the xBloom Studio Skill.",
+        version="0.1.0",
+        lifespan=lifespan_handler,
+    )
+
+    application.state.web_security_config = config
+    application.state.auth_store = store
+
+    install_security_exception_handlers(application)
+
+    # Middleware order: last added runs first on the request. Keep the network
+    # boundary outermost so even CORS preflight cannot bypass peer validation.
+    application.add_middleware(DesignRequestBodyLimitMiddleware)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=config.cors_allow_credentials,
+        allow_methods=list(CORS_ALLOW_METHODS),
+        allow_headers=list(CORS_ALLOW_HEADERS),
+    )
+    application.add_middleware(
+        WebSecurityMiddleware,
+        config=config,
+        store=store,
+    )
+
+    @application.get("/api/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    application.include_router(auth_router)
+    application.include_router(device.router)
+    application.include_router(recipes.router)
+    application.include_router(catalog.router)
+    application.include_router(history.router)
+    application.include_router(design_router)
+
+    # Serve the built frontend (SPA) from the same process.
+    frontend_env = os.environ.get("XBLOOM_FRONTEND_DIR", "").strip()
+    frontend_dir = (
+        Path(frontend_env).expanduser()
+        if frontend_env
+        else Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    )
+
+    if frontend_dir.is_dir():
+        frontend_root = frontend_dir.resolve()
+
+        @application.get("/{path:path}")
+        def serve_frontend(path: str) -> FileResponse:
+            if path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="not found")
+            candidate = (frontend_dir / path).resolve()
+            if candidate.is_relative_to(frontend_root) and candidate.is_file():
+                return FileResponse(candidate)
+            index = frontend_dir / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+            raise HTTPException(status_code=404, detail="frontend index.html not found")
+
+    return application
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:4173",
-    ],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Bound POST /api/design body size before JSON/multipart parsing (structured 413).
-app.add_middleware(DesignRequestBodyLimitMiddleware)
-
-
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-app.include_router(device.router)
-app.include_router(recipes.router)
-app.include_router(catalog.router)
-app.include_router(history.router)
-app.include_router(design_router)
-
-# Serve the built frontend (SPA) from the same process.
-_frontend_env = os.environ.get("XBLOOM_FRONTEND_DIR", "").strip()
-_frontend_dir = (
-    Path(_frontend_env).expanduser()
-    if _frontend_env
-    else Path(__file__).resolve().parent.parent / "frontend" / "dist"
-)
-
-if _frontend_dir.is_dir():
-    _frontend_root = _frontend_dir.resolve()
-
-    @app.get("/{path:path}")
-    def serve_frontend(path: str) -> FileResponse:
-        if path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="not found")
-        candidate = (_frontend_dir / path).resolve()
-        if str(candidate).startswith(str(_frontend_root)) and candidate.is_file():
-            return FileResponse(candidate)
-        index = _frontend_dir / "index.html"
-        if index.is_file():
-            return FileResponse(index)
-        raise HTTPException(status_code=404, detail="frontend index.html not found")
+# Default ASGI app for uvicorn ``main:app`` and existing TestClient imports.
+app = create_app()

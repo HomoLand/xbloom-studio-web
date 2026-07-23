@@ -249,7 +249,10 @@ def test_lifespan_startup_calls_helper_once_shutdown_does_not_stop_bridge():
     stop_mock.assert_not_called()
 
     src = _read(BACKEND_DIR / "main.py")
-    lifespan_body = src[src.index("async def lifespan") : src.index("\napp = FastAPI")]
+    # Lifespan is defined before create_app / default app assignment (Phase C1 factory).
+    end_markers = ("\ndef create_app", "\napp = create_app", "\napp = FastAPI")
+    end = min(src.index(m) for m in end_markers if m in src)
+    lifespan_body = src[src.index("async def lifespan") : end]
     assert "await _ensure_bridge_daemon()" in lifespan_body
     before_yield, after_yield = lifespan_body.split("yield", 1)
     assert "await _ensure_bridge_daemon()" in before_yield
