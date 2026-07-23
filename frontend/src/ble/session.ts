@@ -167,29 +167,35 @@ export class WebBleSession {
 
   /**
    * Connect or reconnect.
-   * - First time: browser device picker (user gesture).
-   * - After Disconnect: reuses the last paired device without a second picker
-     (avoids the “stuck on Connect” hang when Chrome does not re-open the chooser).
+   *
+   * Chrome requires ``requestDevice()`` to run in the same user-gesture turn
+   * (or as the *first* await from the click). Any prior ``await sleep(...)``
+   * drops the gesture → chooser never appears → phase stuck on ``connecting``.
+   * That was the Settings-page hang (Dashboard felt fine after a cached device).
    */
   async connect(opts: { forcePicker?: boolean } = {}): Promise<void> {
     this.stopTerminalWatch();
+
+    // 1) Resolve device BEFORE any other await so the click gesture is still valid.
+    let device = this.device;
+    if (!device || opts.forcePicker) {
+      device = await requestStudioDevice();
+      this.device = device;
+    }
+
+    // 2) Now safe to do async teardown / GATT work.
     this.setupInProgress = true;
     this.setPhase("connecting");
-    // Tear down the previous link but keep the paired device for fast reconnect.
     if (this.stopNotify) {
       this.stopNotify();
       this.stopNotify = null;
     }
     disconnectGatt(this.handles);
     this.handles = null;
-    await sleep(150);
 
     try {
-      let device = this.device;
-      if (!device || opts.forcePicker) {
-        device = await requestStudioDevice();
-        this.device = device;
-      }
+      // Brief settle only after device is already chosen.
+      await sleep(80);
       this.bindDisconnectListener(device);
       this.handles = await connectGatt(device);
       this.notifyCount = 0;
@@ -215,7 +221,6 @@ export class WebBleSession {
       this.setPhase("connected");
     } catch (err) {
       this.setupInProgress = false;
-      // Keep this.device so the next Connect can retry without a full page reload.
       this.cleanupHandles(true);
       const message =
         err instanceof BleGattError
@@ -223,14 +228,25 @@ export class WebBleSession {
           : err instanceof Error
             ? err.message
             : String(err);
-      // If cached device is dead, clear it so the next attempt opens the picker.
-      if (/not found|no longer|permission|failed/i.test(message)) {
+      // Dead permission / gone device → clear cache so next click opens picker first.
+      if (
+        /not found|no longer|permission|failed|disconnected|timeout/i.test(
+          message,
+        )
+      ) {
         this.unbindDisconnectListener();
         this.device = null;
       }
       this.setPhase("error", message);
       throw err;
     }
+  }
+
+  /** Cancel a stuck ``connecting`` phase (e.g. chooser dismissed / hang). */
+  abortConnect(): void {
+    this.setupInProgress = false;
+    this.cleanupHandles(true);
+    this.setPhase("idle");
   }
 
   /** Soft disconnect: drop GATT, keep paired device for one-tap reconnect. */

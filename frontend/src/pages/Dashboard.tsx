@@ -785,15 +785,28 @@ export default function Dashboard() {
               />
             </dl>
             <div className="flex flex-wrap gap-2">
-              {bleSnapshot.phase === "idle" ||
-              bleSnapshot.phase === "disconnected" ||
-              bleSnapshot.phase === "error" ||
-              bleSnapshot.phase === "terminal" ? (
+              {bleSnapshot.phase === "connecting" ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => {
+                    bleSession.abortConnect();
+                    setActionError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : bleSnapshot.phase === "idle" ||
+                bleSnapshot.phase === "disconnected" ||
+                bleSnapshot.phase === "error" ||
+                bleSnapshot.phase === "terminal" ? (
                 <Button
                   variant="primary"
                   size="sm"
                   disabled={actionBusy !== null}
                   onClick={() => {
+                    // First await inside connect must be requestDevice (gesture).
                     setActionError(null);
                     void connectBle().catch((e) =>
                       setActionError(
