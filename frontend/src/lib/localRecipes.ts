@@ -236,7 +236,7 @@ function ensureMigratedStore(): LocalRecipeEntry[] {
     .filter((e): e is LocalRecipeEntry => e != null);
   const needsWrite =
     raw.length !== next.length ||
-    raw.some((u, i) => {
+    raw.some((u) => {
       const n = next.find((x) => x.recipe_id === u.recipe_id);
       if (!n) return true;
       return n.source !== u.source || n.table_id !== u.table_id;
