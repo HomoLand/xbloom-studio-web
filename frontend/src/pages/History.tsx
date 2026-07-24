@@ -1,23 +1,22 @@
 /**
- * Local-first brew journal + account cloud brew-history sync.
+ * Local-first brew journal + account cloud brew-history sync
+ * (credentials live in Settings).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { Cloud, Trash2 } from "lucide-react";
 import {
   Alert,
   Button,
   EmptyState,
-  Field,
   IconButton,
   PageHeader,
   Panel,
-  Select,
   StatusPill,
-  TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
-import { readAccountPrefs, writeAccountPrefs } from "../lib/accountPrefs";
+import { getAccountCredentials } from "../lib/accountPrefs";
 import {
   clearLocalHistory,
   getLocalHistoryEvent,
@@ -27,10 +26,7 @@ import {
   type LocalHistoryEvent,
   type TelemetrySample,
 } from "../lib/localHistory";
-import {
-  CloudError,
-  fetchCloudBrewRecords,
-} from "../lib/xbloomCloud";
+import { CloudError, fetchCloudBrewRecords } from "../lib/xbloomCloud";
 import { shortId } from "../lib/recipeDomain";
 
 const OUTCOME_TONE: Record<
@@ -55,11 +51,6 @@ export default function History() {
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const prefs = readAccountPrefs();
-  const [email, setEmail] = useState(prefs.email);
-  const [password, setPassword] = useState("");
-  const [region, setRegion] = useState<"china" | "international">(prefs.region);
-
   const reload = useCallback(() => {
     setEvents(listLocalHistory(200));
     setTick((n) => n + 1);
@@ -79,18 +70,18 @@ export default function History() {
   const onSyncCloud = async () => {
     setError(null);
     setInfo(null);
-    if (!email.trim() || !password) {
-      setError(t("cloud.needCreds"));
+    const creds = getAccountCredentials();
+    if (!creds) {
+      setError(t("cloud.needSettings"));
       return;
     }
     setBusy(true);
     try {
-      writeAccountPrefs({ email, region });
       const result = await fetchCloudBrewRecords({
-        email,
-        password,
-        region,
-        languageType: readAccountPrefs().languageType,
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
+        languageType: creds.languageType,
       });
       const merged = importCloudBrewRecords(result.records, result.region);
       setInfo(
@@ -120,28 +111,42 @@ export default function History() {
         title={t("history.title")}
         description={t("history.desc")}
         actions={
-          events.length > 0 ? (
-            <IconButton
-              label={t("history.clear")}
-              onClick={() => {
-                if (
-                  typeof window !== "undefined" &&
-                  window.confirm(t("history.clearConfirm"))
-                ) {
-                  clearLocalHistory();
-                  setSelectedId(null);
-                  reload();
-                }
-              }}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => void onSyncCloud()}
             >
-              <Trash2 className="h-4 w-4" aria-hidden />
-            </IconButton>
-          ) : null
+              <Cloud className="h-3.5 w-3.5" aria-hidden />
+              {busy ? t("common.loading") : t("history.sync")}
+            </Button>
+            {events.length > 0 ? (
+              <IconButton
+                label={t("history.clear")}
+                onClick={() => {
+                  if (
+                    typeof window !== "undefined" &&
+                    window.confirm(t("history.clearConfirm"))
+                  ) {
+                    clearLocalHistory();
+                    setSelectedId(null);
+                    reload();
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden />
+              </IconButton>
+            ) : null}
+          </div>
         }
       />
 
       <Alert tone="blue" className="mb-4">
-        {t("history.localMode")}
+        {t("history.localMode")}{" "}
+        <Link to="/settings" className="text-brand hover:underline">
+          {t("cloud.openSettings")}
+        </Link>
       </Alert>
 
       {error ? (
@@ -154,55 +159,6 @@ export default function History() {
           {info}
         </Alert>
       ) : null}
-
-      <Panel title={t("history.cloudSync")} className="mb-4">
-        <p className="mb-3 text-xs text-ink-muted">{t("history.cloudHint")}</p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label={t("cloud.email")}>
-            <TextInput
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </Field>
-          <Field label={t("cloud.password")}>
-            <TextInput
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t("cloud.passwordHint")}
-            />
-          </Field>
-          <Field label={t("cloud.region")}>
-            <Select
-              value={region}
-              onChange={(e) =>
-                setRegion(
-                  e.target.value === "international"
-                    ? "international"
-                    : "china",
-                )
-              }
-            >
-              <option value="china">{t("cloud.regionCn")}</option>
-              <option value="international">{t("cloud.regionIntl")}</option>
-            </Select>
-          </Field>
-          <div className="flex items-end">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy}
-              onClick={() => void onSyncCloud()}
-            >
-              <Cloud className="h-3.5 w-3.5" aria-hidden />
-              {busy ? t("common.loading") : t("history.sync")}
-            </Button>
-          </div>
-        </div>
-      </Panel>
 
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label={t("history.total")} value={status.total} />
@@ -338,8 +294,7 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
         ) : null}
         {event.remote_table_id != null ? (
           <div>
-            tableId{" "}
-            <span className="text-ink">{event.remote_table_id}</span>
+            tableId <span className="text-ink">{event.remote_table_id}</span>
           </div>
         ) : null}
         {event.group_name ? (

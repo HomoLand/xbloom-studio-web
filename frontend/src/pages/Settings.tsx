@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
-import { Bluetooth, LogOut, RefreshCw, Trash2 } from "lucide-react";
+import {
+  Bluetooth,
+  Cloud,
+  History as HistoryIcon,
+  LogOut,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { api, type PairingNewResult, type SessionInfo } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -10,6 +18,7 @@ import {
   IconButton,
   PageHeader,
   Panel,
+  Select,
   Spinner,
   StatusPill,
   TextInput,
@@ -17,18 +26,34 @@ import {
 import { useI18n } from "../i18n/I18nContext";
 import type { Locale } from "../i18n/messages";
 import {
+  clearSessionPassword,
+  getAccountCredentials,
+  hasAccountCredentials,
+  readAccountPrefs,
+  readSessionPassword,
+  saveAccountSession,
+  writeAccountPrefs,
+} from "../lib/accountPrefs";
+import {
   clearAiConfig,
   isAiConfigured,
   readAiConfig,
   writeAiConfig,
   type AiConfig,
 } from "../lib/aiConfig";
+import { importCloudSyncTargets } from "../lib/cloudCatalog";
+import { importCloudBrewRecords } from "../lib/localHistory";
 import {
   formatEpochSeconds,
   formatRemainingFromEpoch,
   isEpochExpired,
   shortId,
 } from "../lib/recipeDomain";
+import {
+  CloudError,
+  fetchCloudBrewRecords,
+  syncAccountCatalog,
+} from "../lib/xbloomCloud";
 import { useMachine } from "../machine/MachineContext";
 import type { MachineDriver } from "../machine/driver";
 
@@ -48,6 +73,18 @@ export default function Settings() {
   const [bleActionError, setBleActionError] = useState<string | null>(null);
   const [aiForm, setAiForm] = useState<AiConfig>(() => readAiConfig());
   const [aiMsg, setAiMsg] = useState<string | null>(null);
+
+  // xBloom account (password session-only)
+  const initialPrefs = readAccountPrefs();
+  const [accEmail, setAccEmail] = useState(initialPrefs.email);
+  const [accPassword, setAccPassword] = useState(() => readSessionPassword());
+  const [accRegion, setAccRegion] = useState<"china" | "international">(
+    initialPrefs.region,
+  );
+  const [accMsg, setAccMsg] = useState<string | null>(null);
+  const [accError, setAccError] = useState<string | null>(null);
+  const [accBusy, setAccBusy] = useState<string | null>(null);
+  const [accReady, setAccReady] = useState(() => hasAccountCredentials());
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -127,6 +164,67 @@ export default function Settings() {
     }
   };
 
+  const saveAccount = () => {
+    setAccError(null);
+    if (!accEmail.trim() || !accPassword) {
+      setAccError(t("cloud.needCreds"));
+      return;
+    }
+    saveAccountSession({
+      email: accEmail,
+      password: accPassword,
+      region: accRegion,
+    });
+    setAccReady(true);
+    setAccMsg(t("settings.accountSaved"));
+  };
+
+  const clearAccount = () => {
+    clearSessionPassword();
+    writeAccountPrefs({ email: accEmail, region: accRegion });
+    setAccPassword("");
+    setAccReady(false);
+    setAccMsg(t("settings.accountCleared"));
+    setAccError(null);
+  };
+
+  const runAccountAction = async (
+    label: string,
+    fn: (creds: NonNullable<ReturnType<typeof getAccountCredentials>>) => Promise<string>,
+  ) => {
+    setAccError(null);
+    setAccMsg(null);
+    // Persist current form first if filled
+    if (accEmail.trim() && accPassword) {
+      saveAccountSession({
+        email: accEmail,
+        password: accPassword,
+        region: accRegion,
+      });
+      setAccReady(true);
+    }
+    const creds = getAccountCredentials();
+    if (!creds) {
+      setAccError(t("cloud.needCreds"));
+      return;
+    }
+    setAccBusy(label);
+    try {
+      const msg = await fn(creds);
+      setAccMsg(msg);
+    } catch (e) {
+      setAccError(
+        e instanceof CloudError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setAccBusy(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -143,6 +241,147 @@ export default function Settings() {
       />
 
       <div className="space-y-4">
+        <Panel title={t("settings.account")}>
+          <p className="mb-3 text-sm text-ink-muted">{t("settings.accountHint")}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label={t("cloud.email")} htmlFor="acc-email">
+              <TextInput
+                id="acc-email"
+                type="email"
+                autoComplete="username"
+                value={accEmail}
+                onChange={(e) => setAccEmail(e.target.value)}
+              />
+            </Field>
+            <Field label={t("cloud.password")} htmlFor="acc-pass">
+              <TextInput
+                id="acc-pass"
+                type="password"
+                autoComplete="current-password"
+                value={accPassword}
+                onChange={(e) => setAccPassword(e.target.value)}
+                placeholder={t("cloud.passwordHint")}
+              />
+            </Field>
+            <Field label={t("cloud.region")} htmlFor="acc-region">
+              <Select
+                id="acc-region"
+                value={accRegion}
+                onChange={(e) =>
+                  setAccRegion(
+                    e.target.value === "international"
+                      ? "international"
+                      : "china",
+                  )
+                }
+              >
+                <option value="china">{t("cloud.regionCn")}</option>
+                <option value="international">{t("cloud.regionIntl")}</option>
+              </Select>
+            </Field>
+            <div className="flex flex-wrap items-end gap-2">
+              <StatusPill tone={accReady ? "green" : "neutral"}>
+                {accReady
+                  ? t("settings.accountSessionOn")
+                  : t("settings.accountSessionOff")}
+              </StatusPill>
+            </div>
+          </div>
+          {accError ? (
+            <Alert tone="red" className="mt-3">
+              {accError}
+            </Alert>
+          ) : null}
+          {accMsg ? (
+            <Alert tone="green" className="mt-3">
+              {accMsg}
+            </Alert>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" variant="primary" onClick={saveAccount}>
+              {t("settings.accountSave")}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={clearAccount}>
+              {t("settings.accountClear")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={accBusy != null}
+              onClick={() =>
+                void runAccountAction("recipes", async (creds) => {
+                  const result = await syncAccountCatalog({
+                    email: creds.email,
+                    password: creds.password,
+                    region: creds.region,
+                    languageType: creds.languageType,
+                  });
+                  const imported = importCloudSyncTargets(
+                    result.targets,
+                    result.region,
+                  );
+                  const total = imported.stats.reduce(
+                    (s, x) => s + x.imported,
+                    0,
+                  );
+                  const candidates = imported.stats.reduce(
+                    (s, x) => s + x.candidates,
+                    0,
+                  );
+                  return t("cloud.syncDone")
+                    .replace("{imported}", String(total))
+                    .replace("{candidates}", String(candidates))
+                    .replace("{region}", result.region);
+                })
+              }
+            >
+              <Cloud className="h-3.5 w-3.5" aria-hidden />
+              {accBusy === "recipes"
+                ? t("common.loading")
+                : t("settings.syncRecipes")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={accBusy != null}
+              onClick={() =>
+                void runAccountAction("history", async (creds) => {
+                  const result = await fetchCloudBrewRecords({
+                    email: creds.email,
+                    password: creds.password,
+                    region: creds.region,
+                    languageType: creds.languageType,
+                  });
+                  const merged = importCloudBrewRecords(
+                    result.records,
+                    result.region,
+                  );
+                  return t("history.syncDone")
+                    .replace("{count}", String(result.count))
+                    .replace("{imported}", String(merged.imported))
+                    .replace("{updated}", String(merged.updated))
+                    .replace("{region}", result.region);
+                })
+              }
+            >
+              <HistoryIcon className="h-3.5 w-3.5" aria-hidden />
+              {accBusy === "history"
+                ? t("common.loading")
+                : t("settings.syncHistory")}
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-ink-faint">
+            {t("settings.accountActionsHint")}{" "}
+            <Link to="/recipes" className="text-brand hover:underline">
+              {t("nav.recipes")}
+            </Link>
+            {" · "}
+            <Link to="/history" className="text-brand hover:underline">
+              {t("nav.history")}
+            </Link>
+          </p>
+        </Panel>
+
         <Panel title={t("settings.language")}>
           <div className="flex flex-wrap gap-2">
             {locales.map((code) => (

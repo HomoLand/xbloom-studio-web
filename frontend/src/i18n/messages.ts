@@ -90,7 +90,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     "history.clearConfirm": "清空全部本地冲煮历史？",
     "history.cloudSync": "同步账号冲煮历史",
     "history.cloudHint":
-      "从 xBloom 官方账号拉取 App 冲煮记录并合并到本机（按 tableId 去重）。密码不落盘。",
+      "从 xBloom 官方账号拉取 App 冲煮记录并合并到本机（按 tableId 去重）。请先在设置中保存账号。",
     "history.sync": "同步账号历史",
     "history.syncDone":
       "已同步 {region}：云端 {count} 条，新增 {imported}，更新 {updated}",
@@ -116,10 +116,13 @@ export const messages: Record<Locale, Record<string, string>> = {
 
     "cloud.title": "官方账号配方",
     "cloud.hint":
-      "同步/上传/删除自己的 xBloom 账号配方。密码仅本次会话使用、不落盘。浏览器直连官方 API 可能受 CORS 限制。",
+      "同步/上传/删除自己的 xBloom 账号配方。请先在设置中保存账号会话。",
     "cloud.email": "邮箱",
     "cloud.password": "密码",
-    "cloud.passwordHint": "不保存到本机",
+    "cloud.passwordHint": "仅当前标签页，不写入磁盘",
+    "cloud.needSettings": "请先在设置中填写并保存 xBloom 账号（邮箱与密码）",
+    "cloud.openSettings": "打开设置",
+    "cloud.actionsUseSettings": "账号凭据在设置中管理",
     "cloud.region": "区域",
     "cloud.regionCn": "中国",
     "cloud.regionIntl": "国际",
@@ -163,7 +166,19 @@ export const messages: Record<Locale, Record<string, string>> = {
     "design.paste": "粘贴",
 
     "settings.title": "设置",
-    "settings.desc": "机器驱动、语言、AI 与本地数据。",
+    "settings.desc": "账号、机器驱动、语言、AI 与本地数据。",
+    "settings.account": "xBloom 账号",
+    "settings.accountHint":
+      "邮箱与区域保存在本机；密码仅保存在当前浏览器标签页（关闭标签即清除）。配方/历史同步与云端上传均使用此处凭据。",
+    "settings.accountSave": "保存账号会话",
+    "settings.accountClear": "清除密码会话",
+    "settings.accountSaved": "账号会话已保存（密码仅本标签页有效）",
+    "settings.accountCleared": "已清除本标签页密码",
+    "settings.accountSessionOn": "会话已就绪",
+    "settings.accountSessionOff": "未设置密码",
+    "settings.syncRecipes": "同步账号配方",
+    "settings.syncHistory": "同步冲煮历史",
+    "settings.accountActionsHint": "也可在配方/历史页一键同步：",
     "settings.language": "语言",
     "settings.driver": "机器驱动",
     "settings.driverHint":
@@ -327,7 +342,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     "history.clearConfirm": "Clear all local brew history?",
     "history.cloudSync": "Sync account brew history",
     "history.cloudHint":
-      "Pull App brew records from your xBloom account into this browser (deduped by tableId). Password is not stored.",
+      "Pull App brew records from your xBloom account into this browser (deduped by tableId). Save the account in Settings first.",
     "history.sync": "Sync account history",
     "history.syncDone":
       "Synced {region}: {count} cloud records, +{imported} new, {updated} updated",
@@ -353,10 +368,13 @@ export const messages: Record<Locale, Record<string, string>> = {
 
     "cloud.title": "Official account recipes",
     "cloud.hint":
-      "Sync/upload/delete your own xBloom account recipes. Password is session-only and never stored. Browser calls to official APIs may be blocked by CORS.",
+      "Sync/upload/delete your own xBloom account recipes. Save the account session in Settings first.",
     "cloud.email": "Email",
     "cloud.password": "Password",
-    "cloud.passwordHint": "Not saved on this device",
+    "cloud.passwordHint": "This tab only — never written to disk",
+    "cloud.needSettings": "Save your xBloom account (email + password) in Settings first",
+    "cloud.openSettings": "Open Settings",
+    "cloud.actionsUseSettings": "Account credentials are managed in Settings",
     "cloud.region": "Region",
     "cloud.regionCn": "China",
     "cloud.regionIntl": "International",
@@ -401,7 +419,19 @@ export const messages: Record<Locale, Record<string, string>> = {
     "design.paste": "Paste",
 
     "settings.title": "Settings",
-    "settings.desc": "Machine driver, language, AI, and local data.",
+    "settings.desc": "Account, machine driver, language, AI, and local data.",
+    "settings.account": "xBloom account",
+    "settings.accountHint":
+      "Email and region stay on this device; password is kept only for this browser tab. Recipe/history sync and cloud uploads use these credentials.",
+    "settings.accountSave": "Save account session",
+    "settings.accountClear": "Clear password session",
+    "settings.accountSaved": "Account session saved (password is tab-only)",
+    "settings.accountCleared": "Tab password cleared",
+    "settings.accountSessionOn": "Session ready",
+    "settings.accountSessionOff": "Password not set",
+    "settings.syncRecipes": "Sync account recipes",
+    "settings.syncHistory": "Sync brew history",
+    "settings.accountActionsHint": "Or sync from Recipes / History:",
     "settings.language": "Language",
     "settings.driver": "Machine driver",
     "settings.driverHint":

@@ -3,6 +3,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Cloud, CloudUpload, Play, RefreshCw, Trash2 } from "lucide-react";
 import type { RecipeContent, RecipeRecord, RecipeRevision } from "../api";
 import {
@@ -14,18 +15,15 @@ import {
   Alert,
   Button,
   EmptyState,
-  Field,
   IconButton,
   PageHeader,
   Panel,
   RecipeThumb,
-  Select,
   Spinner,
   StatusPill,
-  TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
-import { readAccountPrefs, writeAccountPrefs } from "../lib/accountPrefs";
+import { getAccountCredentials } from "../lib/accountPrefs";
 import { importCloudSyncTargets } from "../lib/cloudCatalog";
 import {
   deleteUserRecipe,
@@ -62,12 +60,6 @@ export default function Recipes() {
   const [latest, setLatest] = useState<RecipeRevision | null>(null);
   const [localEntry, setLocalEntry] = useState<LocalRecipeEntry | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
-
-  // Cloud account (password session-only)
-  const prefs = readAccountPrefs();
-  const [email, setEmail] = useState(prefs.email);
-  const [password, setPassword] = useState("");
-  const [region, setRegion] = useState<"china" | "international">(prefs.region);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
 
   const loadList = useCallback(() => {
@@ -107,8 +99,10 @@ export default function Recipes() {
   const canBrewWebBle =
     driver === "web-bluetooth" && content != null && isCoffeeContent(content);
 
-  const persistPrefs = () => {
-    writeAccountPrefs({ email, region });
+  const requireCreds = () => {
+    const creds = getAccountCredentials();
+    if (!creds) throw new CloudError(t("cloud.needSettings"));
+    return creds;
   };
 
   const runCloud = async (label: string, fn: () => Promise<void>) => {
@@ -116,7 +110,6 @@ export default function Recipes() {
     setInfo(null);
     setCloudBusy(label);
     try {
-      persistPrefs();
       await fn();
       loadList();
       if (selectedId) openDetail(selectedId);
@@ -135,26 +128,23 @@ export default function Recipes() {
 
   const onSync = () =>
     void runCloud("sync", async () => {
-      if (!email.trim() || !password) {
-        throw new CloudError(t("cloud.needCreds"));
-      }
+      const creds = requireCreds();
       const result = await syncAccountCatalog({
-        email,
-        password,
-        region,
-        languageType: readAccountPrefs().languageType,
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
+        languageType: creds.languageType,
       });
       const imported = importCloudSyncTargets(result.targets, result.region);
       const total = imported.stats.reduce((s, x) => s + x.imported, 0);
       const candidates = imported.stats.reduce((s, x) => s + x.candidates, 0);
-      // Also pull account brew journal into local history (best-effort).
       let historyNote = "";
       try {
         const hist = await fetchCloudBrewRecords({
-          email,
-          password,
-          region,
-          languageType: readAccountPrefs().languageType,
+          email: creds.email,
+          password: creds.password,
+          region: creds.region,
+          languageType: creds.languageType,
         });
         const merged = importCloudBrewRecords(hist.records, hist.region);
         historyNote = t("cloud.syncHistoryNote")
@@ -174,12 +164,12 @@ export default function Recipes() {
 
   const onPush = () =>
     void runCloud("push", async () => {
-      if (!email.trim() || !password) throw new CloudError(t("cloud.needCreds"));
+      const creds = requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
       const result = await pushCloudRecipe({
-        email,
-        password,
-        region,
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
         content,
         confirmWrite: CLOUD_WRITE_CONFIRM,
       });
@@ -195,7 +185,7 @@ export default function Recipes() {
             recipeId: localEntry.recipe_id,
             source: localEntry.source,
             tableId: result.remote_table_id,
-            region,
+            region: creds.region,
           });
         }
       } else {
@@ -207,7 +197,7 @@ export default function Recipes() {
             recipeId: localEntry.recipe_id,
             source: localEntry.source === "official" ? "user" : localEntry.source,
             tableId: result.remote_table_id,
-            region,
+            region: creds.region,
           });
         }
       }
@@ -215,7 +205,7 @@ export default function Recipes() {
 
   const onDeleteCloud = () =>
     void runCloud("delete", async () => {
-      if (!email.trim() || !password) throw new CloudError(t("cloud.needCreds"));
+      const creds = requireCreds();
       const tableId = localEntry?.table_id;
       if (!tableId) throw new CloudError(t("cloud.needTableId"));
       if (
@@ -225,9 +215,9 @@ export default function Recipes() {
         return;
       }
       await deleteCloudRecipe({
-        email,
-        password,
-        region,
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
         tableId,
         confirmDelete: CLOUD_DELETE_CONFIRM,
         expectedName: localEntry?.name,
@@ -238,14 +228,14 @@ export default function Recipes() {
           recipeId: localEntry.recipe_id,
           source: localEntry.source,
           tableId: null,
-          region,
+          region: creds.region,
         });
       }
     });
 
   const onUpdateCloud = () =>
     void runCloud("update", async () => {
-      if (!email.trim() || !password) throw new CloudError(t("cloud.needCreds"));
+      const creds = requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
       const tableId = localEntry?.table_id;
       if (!tableId) throw new CloudError(t("cloud.needTableId"));
@@ -256,9 +246,9 @@ export default function Recipes() {
         return;
       }
       const result = await updateCloudRecipe({
-        email,
-        password,
-        region,
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
         tableId,
         content,
         expectedName: localEntry?.name,
@@ -273,7 +263,7 @@ export default function Recipes() {
           recipeId: localEntry.recipe_id,
           source: localEntry.source === "official" ? "user" : localEntry.source,
           tableId: result.remote_table_id,
-          region,
+          region: creds.region,
         });
       }
     });
@@ -307,7 +297,10 @@ export default function Recipes() {
       />
 
       <Alert tone="blue" className="mb-4">
-        {t("recipes.localMode")}
+        {t("recipes.localMode")}{" "}
+        <Link to="/settings" className="text-brand hover:underline">
+          {t("cloud.openSettings")}
+        </Link>
       </Alert>
 
       {error ? (
@@ -321,54 +314,18 @@ export default function Recipes() {
         </Alert>
       ) : null}
 
-      <Panel title={t("cloud.title")} className="mb-4">
-        <p className="mb-3 text-xs text-ink-muted">{t("cloud.hint")}</p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label={t("cloud.email")}>
-            <TextInput
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </Field>
-          <Field label={t("cloud.password")}>
-            <TextInput
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t("cloud.passwordHint")}
-            />
-          </Field>
-          <Field label={t("cloud.region")}>
-            <Select
-              value={region}
-              onChange={(e) =>
-                setRegion(
-                  e.target.value === "international"
-                    ? "international"
-                    : "china",
-                )
-              }
-            >
-              <option value="china">{t("cloud.regionCn")}</option>
-              <option value="international">{t("cloud.regionIntl")}</option>
-            </Select>
-          </Field>
-          <div className="flex items-end">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={cloudBusy != null}
-              onClick={onSync}
-            >
-              <Cloud className="h-3.5 w-3.5" aria-hidden />
-              {cloudBusy === "sync" ? t("common.loading") : t("cloud.sync")}
-            </Button>
-          </div>
-        </div>
-      </Panel>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={cloudBusy != null}
+          onClick={onSync}
+        >
+          <Cloud className="h-3.5 w-3.5" aria-hidden />
+          {cloudBusy === "sync" ? t("common.loading") : t("cloud.sync")}
+        </Button>
+        <span className="text-xs text-ink-faint">{t("cloud.actionsUseSettings")}</span>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <Panel title={t("recipes.title")}>
