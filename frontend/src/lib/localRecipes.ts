@@ -67,22 +67,132 @@ function officialEntries(): LocalRecipeEntry[] {
   }));
 }
 
-export function listAllLocalRecipes(): LocalRecipeEntry[] {
-  const users = readUserRaw();
-  const officialIds = new Set(officialEntries().map((o) => o.recipe_id));
-  // User entries override official when same id (rare).
-  const userById = new Map(users.map((u) => [u.recipe_id, u]));
-  const merged: LocalRecipeEntry[] = [];
-  for (const o of officialEntries()) {
-    merged.push(userById.get(o.recipe_id) ?? o);
-    userById.delete(o.recipe_id);
+function normalizeRecipeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Stable-ish content compare so imported JSON clones match bundled starters. */
+export function recipeContentEquivalent(
+  a: RecipeContent,
+  b: RecipeContent,
+): boolean {
+  try {
+    return (
+      JSON.stringify(normalizeContentForCompare(a)) ===
+      JSON.stringify(normalizeContentForCompare(b))
+    );
+  } catch {
+    return false;
   }
-  for (const u of userById.values()) {
-    if (!officialIds.has(u.recipe_id) || u.source !== "official") {
-      merged.push(u);
+}
+
+function normalizeContentForCompare(content: RecipeContent): unknown {
+  // Drop volatile fields; compare the brew-relevant shape.
+  const c = JSON.parse(JSON.stringify(content)) as Record<string, unknown>;
+  delete c.note;
+  if (typeof c.name === "string") {
+    c.name = normalizeRecipeName(c.name);
+  }
+  if (Array.isArray(c.pours)) {
+    c.pours = (c.pours as Array<Record<string, unknown>>).map((p) => {
+      const q = { ...p };
+      if (typeof q.label === "string") q.label = q.label.trim();
+      return q;
+    });
+  }
+  return c;
+}
+
+/**
+ * Drop localStorage user clones that only duplicate a bundled official starter
+ * (same display name + same content). Common after importing
+ * public/recipes/tea-baihao-yinzhen.json while the starter is also shipped.
+ */
+export function pruneOfficialClonesFromUserStore(): number {
+  const offs = officialEntries();
+  const users = readUserRaw();
+  const next = users.filter((u) => {
+    // Never prune cloud rows with a table id — those are account catalog.
+    if (u.source === "cloud" || u.table_id != null) return true;
+    const twin = offs.find(
+      (o) =>
+        normalizeRecipeName(o.name) === normalizeRecipeName(u.name) &&
+        recipeContentEquivalent(o.content, u.content),
+    );
+    return !twin;
+  });
+  const removed = users.length - next.length;
+  if (removed > 0) writeUserRaw(next);
+  return removed;
+}
+
+let prunedThisSession = false;
+
+export function listAllLocalRecipes(): LocalRecipeEntry[] {
+  // One soft cleanup per tab session so “我的 + 官方” clones disappear.
+  if (!prunedThisSession && typeof localStorage !== "undefined") {
+    prunedThisSession = true;
+    try {
+      pruneOfficialClonesFromUserStore();
+    } catch {
+      /* ignore */
     }
   }
-  // Sort: official first, then user by updated_at desc
+
+  const offs = officialEntries();
+  const users = readUserRaw();
+  const officialIds = new Set(offs.map((o) => o.recipe_id));
+  const userById = new Map(users.map((u) => [u.recipe_id, u]));
+
+  // User clone of an official (same name + same content) → hide user, keep official.
+  // User edit of same name (different content) → show user, hide that official.
+  const suppressOfficialIds = new Set<string>();
+  const suppressUserIds = new Set<string>();
+
+  for (const u of users) {
+    if (u.source === "cloud" || u.table_id != null) continue;
+    const twin = offs.find(
+      (o) => normalizeRecipeName(o.name) === normalizeRecipeName(u.name),
+    );
+    if (!twin) continue;
+    if (recipeContentEquivalent(u.content, twin.content)) {
+      suppressUserIds.add(u.recipe_id);
+    } else {
+      // Customized fork with the same title — prefer the user's version.
+      suppressOfficialIds.add(twin.recipe_id);
+    }
+  }
+
+  const merged: LocalRecipeEntry[] = [];
+  for (const o of offs) {
+    if (suppressOfficialIds.has(o.recipe_id)) {
+      const override =
+        users.find(
+          (u) =>
+            !suppressUserIds.has(u.recipe_id) &&
+            normalizeRecipeName(u.name) === normalizeRecipeName(o.name),
+        ) ?? null;
+      if (override) {
+        merged.push(override);
+        suppressUserIds.add(override.recipe_id);
+      }
+      continue;
+    }
+    const byId = userById.get(o.recipe_id);
+    if (byId) {
+      merged.push(byId);
+      suppressUserIds.add(byId.recipe_id);
+    } else {
+      merged.push(o);
+    }
+  }
+
+  for (const u of users) {
+    if (suppressUserIds.has(u.recipe_id)) continue;
+    if (officialIds.has(u.recipe_id) && u.source === "official") continue;
+    merged.push(u);
+  }
+
   return merged.sort((a, b) => {
     if (a.source === "official" && b.source !== "official") return -1;
     if (b.source === "official" && a.source !== "official") return 1;
@@ -205,9 +315,11 @@ export function saveUserRecipe(
 }
 
 export function deleteUserRecipe(recipeId: string): boolean {
-  if (recipeId.startsWith("official:")) return false;
-  const users = readUserRaw().filter((u) => u.recipe_id !== recipeId);
-  writeUserRaw(users);
+  // Only removes rows from the user store. Bundled official/starter ids that
+  // were never saved to localStorage cannot be deleted.
+  const users = readUserRaw();
+  if (!users.some((u) => u.recipe_id === recipeId)) return false;
+  writeUserRaw(users.filter((u) => u.recipe_id !== recipeId));
   return true;
 }
 
