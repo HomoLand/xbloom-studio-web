@@ -112,21 +112,28 @@ export default function Recipes() {
     }
   }, []);
 
-  const openDetail = useCallback((recipeId: string) => {
-    setSelectedId(recipeId);
-    const entry = getLocalRecipe(recipeId);
-    if (!entry) {
-      setDetail(null);
-      setLatest(null);
-      setLocalEntry(null);
-      setError("Recipe not found");
-      return;
-    }
-    setDetail(toRecipeRecord(entry));
-    setLatest(toLatestRevision(entry));
-    setLocalEntry(entry);
-    setError(null);
-  }, []);
+  const openDetail = useCallback(
+    (recipeId: string, opts?: { quietMissing?: boolean }) => {
+      setSelectedId(recipeId);
+      const entry = getLocalRecipe(recipeId);
+      if (!entry) {
+        setSelectedId(null);
+        setDetail(null);
+        setLatest(null);
+        setLocalEntry(null);
+        // After delete, runCloud may refresh a gone id — stay silent.
+        if (!opts?.quietMissing) {
+          setError(t("recipes.notFound"));
+        }
+        return;
+      }
+      setDetail(toRecipeRecord(entry));
+      setLatest(toLatestRevision(entry));
+      setLocalEntry(entry);
+      setError(null);
+    },
+    [t],
+  );
 
   useEffect(() => {
     loadList();
@@ -181,7 +188,10 @@ export default function Recipes() {
     try {
       await fn();
       loadList();
-      if (selectedId) openDetail(selectedId);
+      // Only re-open detail if the recipe still exists (e.g. not after delete).
+      if (selectedId && getLocalRecipe(selectedId)) {
+        openDetail(selectedId);
+      }
     } catch (e) {
       if (e instanceof CloudError && e.code === "not_on_account") {
         setError(t("cloud.notOnAccount"));
@@ -411,6 +421,8 @@ export default function Recipes() {
       return;
     }
     deleteUserRecipe(localEntry.recipe_id);
+    setError(null);
+    setInfo(t("recipes.deletedLocal"));
     setSelectedId(null);
     setDetail(null);
     setLatest(null);
