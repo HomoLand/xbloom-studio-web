@@ -27,10 +27,6 @@ import {
   type BridgeState,
 } from "../api";
 import {
-  BrewConfirmDialog,
-  type BrewTarget,
-} from "../components/BrewConfirmDialog";
-import {
   Alert,
   Button,
   IconButton,
@@ -43,7 +39,6 @@ import {
 import { classifyOperationalError } from "../lib/apiErrors";
 import { useI18n } from "../i18n/I18nContext";
 import { isStaticDeploy } from "../lib/deploy";
-import { sampleCoffeeIfEmpty } from "../lib/localRecipes";
 import { useMachine } from "../machine/MachineContext";
 import {
   applyExplicitEventRearm,
@@ -99,7 +94,6 @@ export default function Dashboard() {
     useMachine();
   const webBle = driver === "web-bluetooth";
   const staticDeploy = isStaticDeploy();
-  const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [bridge, setBridge] = useState<BridgeState | null>(null);
   const [stored, setStored] = useState<StoredWorkflow | null>(() =>
     readStoredWorkflow(),
@@ -947,21 +941,13 @@ export default function Dashboard() {
                   {t("dashboard.disconnect")}
                 </Button>
               )}
-              <Button
-                variant="brand"
-                size="sm"
-                disabled={actionBusy !== null}
-                onClick={() => {
-                  const content = sampleCoffeeIfEmpty();
-                  setBrewTarget({
-                    recipeRevisionId: "local:sample-hot-v1",
-                    content,
-                    recipeName: content.name,
-                  });
-                }}
+              <Link
+                to="/recipes"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full bg-brand px-3 text-xs font-medium text-paper hover:brightness-110"
               >
-                {t("dashboard.brewSample")}
-              </Button>
+                <Beaker className="h-3.5 w-3.5" aria-hidden />
+                {t("dashboard.pickRecipe")}
+              </Link>
               {webBleCanPause ? (
                 <Button
                   variant="secondary"
@@ -1008,15 +994,6 @@ export default function Dashboard() {
           </div>
         </Panel>
       ) : null}
-
-      <BrewConfirmDialog
-        open={brewTarget != null}
-        target={brewTarget}
-        onClose={() => setBrewTarget(null)}
-        onStarted={() => {
-          setBrewTarget(null);
-        }}
-      />
 
       {busyExternalBanner ? (
         <Alert tone="amber" title="Device busy (external)" className="mb-4">

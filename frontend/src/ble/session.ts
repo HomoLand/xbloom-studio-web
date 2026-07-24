@@ -6,12 +6,18 @@
  * scale / grinder / hot-water control builders (same frames as core protocol).
  */
 
-import type { CoffeeRecipeContent } from "../api";
+import type { CoffeeRecipeContent, TeaRecipeContent } from "../api";
 import {
   appendLocalHistory,
   type TelemetrySample,
 } from "../lib/localHistory.ts";
 import { coffeeContentToProtocol } from "./coffeeRecipe.ts";
+import {
+  buildRecipeStartQuit,
+  buildTeaLoadFrames,
+  buildTeaStart,
+  teaContentToProtocol,
+} from "./teaLoad.ts";
 import {
   buildBrewerEnter,
   buildBrewerQuit,
@@ -523,6 +529,81 @@ export class WebBleSession {
       `Load did not reach armed state (last=${this.machineStateName ?? "none"}).`,
       "load_timeout",
     );
+  }
+
+  /**
+   * Upload tea recipe (set cup + code). Does not execute.
+   * Separately call startTea after UI safety phrase.
+   */
+  async loadTea(
+    content: TeaRecipeContent,
+    opts: { journal?: BrewJournalMeta } = {},
+  ): Promise<void> {
+    if (
+      !this.handles ||
+      this.phase === "idle" ||
+      this.phase === "disconnected" ||
+      this.phase === "error"
+    ) {
+      throw new BleGattError(
+        "Connect to the machine before loading tea.",
+        "not_connected",
+      );
+    }
+    const programmed = (content.pours || []).reduce(
+      (s, p) => s + Number(p.ml || 0),
+      0,
+    );
+    if (opts.journal) {
+      this.beginBrewJournal({
+        ...opts.journal,
+        recipe_name: opts.journal.recipe_name ?? content.name,
+        kind: "tea",
+        target_water_ml: opts.journal.target_water_ml ?? programmed,
+        pour_count: opts.journal.pour_count ?? content.pours.length,
+      });
+    } else {
+      this.beginBrewJournal({
+        recipe_name: content.name,
+        kind: "tea",
+        target_water_ml: programmed,
+        pour_count: content.pours.length,
+      });
+    }
+    this.loaded = false;
+    this.setPhase("loading");
+    // Coffee path: status settle is done on connect; tea still needs load frames.
+    const frames = buildTeaLoadFrames(teaContentToProtocol(content));
+    for (const frame of frames) {
+      await this.requireWrite(frame);
+      await sleep(300);
+    }
+    // Tea load stops at pre-start (not coffee armed 0x1f); treat as armed for UI.
+    this.loaded = true;
+    this.setPhase("armed");
+  }
+
+  /** Execute previously uploaded tea recipe (CMD 4512). */
+  async startTea(): Promise<void> {
+    if (!this.handles) {
+      throw new BleGattError("Not connected.", "not_connected");
+    }
+    if (!this.loaded && this.phase !== "armed") {
+      throw new BleGattError("Load a tea recipe before starting.", "not_armed");
+    }
+    this.setPhase("starting");
+    await this.requireWrite(buildTeaStart());
+    this.setPhase("brewing");
+    this.watchTerminalAndRelease();
+  }
+
+  /** Exit tea pre-start without brewing. */
+  async unloadTea(): Promise<void> {
+    await this.requireWrite(buildRecipeStartQuit());
+    this.loaded = false;
+    if (this.phase === "armed" || this.phase === "loading") {
+      this.setPhase("connected");
+    }
   }
 
   /**

@@ -15,17 +15,13 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import type {
-  CoffeeRecipeContent,
-  RecipeContent,
-  RecipeRecord,
-  RecipeRevision,
-} from "../api";
+import type { RecipeContent, RecipeRecord, RecipeRevision } from "../api";
 import {
   BrewConfirmDialog,
   type BrewTarget,
 } from "../components/BrewConfirmDialog";
 import { RecipeListItem } from "../components/RecipeListItem";
+import { SlotProgrammer } from "../components/SlotProgrammer";
 import {
   Alert,
   Button,
@@ -49,7 +45,7 @@ import {
   toRecipeRecord,
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
-import { isCoffeeContent } from "../lib/recipeDomain";
+import { isCoffeeContent, isTeaContent } from "../lib/recipeDomain";
 import {
   downloadText,
   exportRecipesJson,
@@ -71,7 +67,7 @@ import { useMachine } from "../machine/MachineContext";
 
 export default function Recipes() {
   const { t } = useI18n();
-  const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
+  const { driver } = useMachine();
   const [searchParams] = useSearchParams();
   const [recipes, setRecipes] = useState<RecipeRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,7 +121,9 @@ export default function Recipes() {
 
   const content: RecipeContent | null = latest?.content ?? null;
   const canBrewWebBle =
-    driver === "web-bluetooth" && content != null && isCoffeeContent(content);
+    driver === "web-bluetooth" &&
+    content != null &&
+    (isCoffeeContent(content) || isTeaContent(content));
 
   const requireCreds = () => {
     const creds = getAccountCredentials();
@@ -327,31 +325,6 @@ export default function Recipes() {
       loadList();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const onSaveSlot = async () => {
-    if (!content || !isCoffeeContent(content)) {
-      setError(t("recipes.slotCoffeeOnly"));
-      return;
-    }
-    setError(null);
-    setInfo(null);
-    setCloudBusy("slot");
-    try {
-      if (
-        bleSnapshot.phase === "idle" ||
-        bleSnapshot.phase === "disconnected" ||
-        bleSnapshot.phase === "error"
-      ) {
-        await connectBle();
-      }
-      await bleSession.saveSlots([content as CoffeeRecipeContent]);
-      setInfo(t("recipes.slotSaved"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setCloudBusy(null);
     }
   };
 
@@ -623,20 +596,6 @@ export default function Recipes() {
                   <Download className="h-3.5 w-3.5" aria-hidden />
                   JSON
                 </Button>
-                {isCoffeeContent(content) ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={
-                      cloudBusy != null || driver !== "web-bluetooth"
-                    }
-                    onClick={() => void onSaveSlot()}
-                  >
-                    {cloudBusy === "slot"
-                      ? t("common.loading")
-                      : t("recipes.saveSlot")}
-                  </Button>
-                ) : null}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -693,6 +652,8 @@ export default function Recipes() {
           )}
         </Panel>
       </div>
+
+      <SlotProgrammer />
 
       <BrewConfirmDialog
         open={brewTarget != null}

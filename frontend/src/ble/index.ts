@@ -55,6 +55,11 @@ export {
   buildBrewerQuit,
 } from "./extras";
 export {
+  buildTeaLoadFrames,
+  buildTeaStart,
+  teaContentToProtocol,
+} from "./teaLoad";
+export {
   parseNotification,
   notificationFrameIsValid,
   NotificationFrameStream,

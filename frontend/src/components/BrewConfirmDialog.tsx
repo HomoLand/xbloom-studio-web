@@ -84,8 +84,8 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
   const brewWebBluetooth = async () => {
     if (!target || !content) return;
-    if (kind === "tea" || !isCoffeeContent(content)) {
-      setError(t("brew.coffeeOnly"));
+    if (!isCoffeeContent(content) && !isTeaContent(content)) {
+      setError(t("brew.unsupported"));
       return;
     }
     if (confirm.trim() !== phrase) {
@@ -98,6 +98,7 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
     setUncertain(false);
     setBlockMutation(false);
 
+    const beverage = kind;
     let workflowId = loadedWorkflowId;
     try {
       if (
@@ -112,31 +113,46 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       if (!workflowId) {
         setBusy("load");
         workflowId = newRequestId("webble");
-        await bleSession.loadCoffee(content, {
-          journal: {
-            recipe_name: target.recipeName ?? recipeDisplayName(content),
-            recipe_revision_id: target.recipeRevisionId,
-            workflow_id: workflowId,
-            kind: content.kind,
-          },
-        });
+        if (isTeaContent(content)) {
+          await bleSession.loadTea(content, {
+            journal: {
+              recipe_name: target.recipeName ?? recipeDisplayName(content),
+              recipe_revision_id: target.recipeRevisionId,
+              workflow_id: workflowId,
+              kind: "tea",
+            },
+          });
+        } else {
+          await bleSession.loadCoffee(content, {
+            journal: {
+              recipe_name: target.recipeName ?? recipeDisplayName(content),
+              recipe_revision_id: target.recipeRevisionId,
+              workflow_id: workflowId,
+              kind: content.kind,
+            },
+          });
+        }
         setLoadedWorkflowId(workflowId);
-        persistWorkflow(workflowId, "coffee", target.recipeRevisionId);
+        persistWorkflow(workflowId, beverage, target.recipeRevisionId);
       } else {
         bleSession.beginBrewJournal({
           recipe_name: target.recipeName ?? recipeDisplayName(content),
           recipe_revision_id: target.recipeRevisionId,
           workflow_id: workflowId,
-          kind: isCoffeeContent(content) ? content.kind : "coffee",
+          kind: isTeaContent(content) ? "tea" : content.kind,
         });
       }
 
       setBusy("start");
-      await bleSession.startBrew();
-      persistWorkflow(workflowId, "coffee", target.recipeRevisionId);
+      if (isTeaContent(content)) {
+        await bleSession.startTea();
+      } else {
+        await bleSession.startBrew();
+      }
+      persistWorkflow(workflowId, beverage, target.recipeRevisionId);
       const startedId = workflowId;
       reset();
-      onStarted(startedId, "coffee");
+      onStarted(startedId, beverage);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setRecovery(t("brew.readyCheck"));
