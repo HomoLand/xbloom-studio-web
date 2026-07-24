@@ -46,7 +46,9 @@ import {
 import {
   deleteUserRecipe,
   getLocalRecipe,
+  isOwnedOnCloud,
   listAllLocalRecipes,
+  resolveOwnedTableId,
   saveUserRecipe,
   toLatestRevision,
   toRecipeRecord,
@@ -272,8 +274,10 @@ export default function Recipes() {
   const onDeleteCloud = () =>
     void runCloud("delete", async () => {
       const creds = requireCreds();
-      const tableId = localEntry?.table_id;
-      if (!tableId) throw new CloudError(t("cloud.needTableId"));
+      const tableId = resolveOwnedTableId(localEntry);
+      if (tableId == null || !isOwnedOnCloud(localEntry)) {
+        throw new CloudError(t("cloud.needTableId"));
+      }
       if (
         typeof window !== "undefined" &&
         !window.confirm(t("cloud.deleteConfirm"))
@@ -288,14 +292,15 @@ export default function Recipes() {
         confirmDelete: CLOUD_DELETE_CONFIRM,
         expectedName: localEntry?.name,
       });
-      setInfo(t("cloud.deleted").replace("{id}", String(tableId)));
+      setInfo(t("cloud.deleted"));
+      // Remove local row after successful cloud delete of owned recipe.
       if (localEntry) {
-        saveUserRecipe(localEntry.content, {
-          recipeId: localEntry.recipe_id,
-          source: localEntry.source,
-          tableId: null,
-          region: creds.region,
-        });
+        deleteUserRecipe(localEntry.recipe_id);
+        setSelectedId(null);
+        setDetail(null);
+        setLatest(null);
+        setLocalEntry(null);
+        loadList();
       }
     });
 
@@ -316,8 +321,8 @@ export default function Recipes() {
   const onCreateShare = () =>
     void runCloud("share-create", async () => {
       const creds = requireCreds();
-      const tableId = localEntry?.table_id;
-      if (!tableId) throw new CloudError(t("share.needTableId"));
+      const tableId = resolveOwnedTableId(localEntry);
+      if (tableId == null) throw new CloudError(t("share.needTableId"));
       const result = await createCloudShareLink({
         email: creds.email,
         password: creds.password,
@@ -329,7 +334,7 @@ export default function Recipes() {
         saveUserRecipe(localEntry.content, {
           recipeId: localEntry.recipe_id,
           source: localEntry.source,
-          tableId: localEntry.table_id,
+          tableId,
           region: localEntry.region ?? creds.region,
           origin: localEntry.origin,
           shareLink: result.share_link,
@@ -365,8 +370,10 @@ export default function Recipes() {
     void runCloud("update", async () => {
       const creds = requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
-      const tableId = localEntry?.table_id;
-      if (!tableId) throw new CloudError(t("cloud.needTableId"));
+      const tableId = resolveOwnedTableId(localEntry);
+      if (tableId == null || !isOwnedOnCloud(localEntry)) {
+        throw new CloudError(t("cloud.needTableId"));
+      }
       if (
         typeof window !== "undefined" &&
         !window.confirm(t("cloud.updateConfirm"))
@@ -381,17 +388,14 @@ export default function Recipes() {
         content,
         expectedName: localEntry?.name,
       });
-      setInfo(
-        t("cloud.updated")
-          .replace("{old}", String(result.deleted_table_id))
-          .replace("{new}", String(result.remote_table_id ?? "—")),
-      );
+      setInfo(t("cloud.updated"));
       if (localEntry) {
         saveUserRecipe(content, {
           recipeId: localEntry.recipe_id,
           source: localEntry.source === "official" ? "user" : localEntry.source,
           tableId: result.remote_table_id,
           region: creds.region,
+          origin: "created",
         });
       }
     });
@@ -675,7 +679,7 @@ export default function Recipes() {
                   </div>
                   <div className="mt-1 text-xs text-ink-faint">
                     {detail.kind}
-                    {localEntry?.table_id
+                    {isOwnedOnCloud(localEntry)
                       ? ` · ${t("recipes.onAccount")}`
                       : localEntry?.source === "shared"
                         ? ` · ${t("recipes.localOnly")}`
@@ -789,25 +793,29 @@ export default function Recipes() {
                     {t("share.copyLink")}
                   </Button>
                 ) : null}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={
-                    cloudBusy != null ||
-                    (!localEntry?.table_id && !localEntry?.share_link)
-                  }
-                  onClick={onCreateShare}
-                  title={
-                    !localEntry?.table_id
-                      ? t("share.needTableId")
-                      : t("share.createHint")
-                  }
-                >
-                  <Share2 className="h-3.5 w-3.5" aria-hidden />
-                  {cloudBusy === "share-create"
-                    ? t("common.loading")
-                    : t("share.create")}
-                </Button>
+                {resolveOwnedTableId(localEntry) != null ||
+                localEntry?.share_link ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={
+                      cloudBusy != null ||
+                      (resolveOwnedTableId(localEntry) == null &&
+                        !localEntry?.share_link)
+                    }
+                    onClick={onCreateShare}
+                    title={
+                      resolveOwnedTableId(localEntry) == null
+                        ? t("share.needTableId")
+                        : t("share.createHint")
+                    }
+                  >
+                    <Share2 className="h-3.5 w-3.5" aria-hidden />
+                    {cloudBusy === "share-create"
+                      ? t("common.loading")
+                      : t("share.create")}
+                  </Button>
+                ) : null}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -817,7 +825,7 @@ export default function Recipes() {
                   <CloudUpload className="h-3.5 w-3.5" aria-hidden />
                   {cloudBusy === "push" ? t("common.loading") : t("cloud.push")}
                 </Button>
-                {localEntry?.table_id ? (
+                {isOwnedOnCloud(localEntry) ? (
                   <>
                     <Button
                       variant="secondary"

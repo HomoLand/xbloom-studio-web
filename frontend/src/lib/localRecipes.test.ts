@@ -24,8 +24,10 @@ const store = new Map<string, string>();
 
 const {
   classifyCloudRecipeSource,
+  isOwnedOnCloud,
   listAllLocalRecipes,
   pruneOfficialClonesFromUserStore,
+  resolveOwnedTableId,
   saveUserRecipe,
   validateLocalContent,
 } = await import("./localRecipes.ts");
@@ -140,6 +142,54 @@ describe("saveUserRecipe", () => {
     const e = saveUserRecipe(teaContent, { source: "user" });
     assert.equal(e.source, "user");
     assert.equal(listAllLocalRecipes().length, 1);
+  });
+});
+
+describe("owned cloud table id", () => {
+  beforeEach(() => store.clear());
+
+  it("heals table_id from cloud:region:id and allows cloud delete UI", () => {
+    store.set(
+      "xbloom.userRecipes.v1",
+      JSON.stringify([
+        {
+          recipe_id: "cloud:china:4242",
+          name: "我的配方",
+          kind: "tea",
+          source: "user",
+          origin: "created",
+          content: teaContent,
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+      ]),
+    );
+    const e = listAllLocalRecipes()[0]!;
+    assert.equal(resolveOwnedTableId(e), 4242);
+    assert.equal(isOwnedOnCloud(e), true);
+  });
+
+  it("does not treat share import author id as owned", () => {
+    store.set(
+      "xbloom.userRecipes.v1",
+      JSON.stringify([
+        {
+          recipe_id: "share:international:287965",
+          name: "over ice",
+          kind: "hot",
+          source: "shared",
+          origin: "shared",
+          table_id: 287965,
+          content: teaContent,
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+      ]),
+    );
+    const e = listAllLocalRecipes()[0]!;
+    assert.equal(e.table_id, null);
+    assert.equal(resolveOwnedTableId(e), null);
+    assert.equal(isOwnedOnCloud(e), false);
   });
 });
 

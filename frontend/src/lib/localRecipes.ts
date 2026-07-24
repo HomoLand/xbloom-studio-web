@@ -157,17 +157,76 @@ function migrateEntry(entry: LocalRecipeEntry): LocalRecipeEntry | null {
   if (next.source === "user" && next.origin === "shared") {
     next = { ...next, source: "shared" };
   }
-  // Share-link imports used to copy the *author's* tableId, which is not owned
-  // by this account. Clear it so update/delete cloud do not target strangers.
-  // (table_id is re-set only after the user uploads to their own account.)
+  // Share-link imports used to copy the *author's* tableId. Only clear when the
+  // row is still a pure share import (share:… id) that was never uploaded to
+  // this account. Do NOT strip table_id from cloud:… / created sync rows.
   if (
-    (next.source === "shared" || next.recipe_id.startsWith("share:")) &&
-    next.table_id != null &&
-    next.origin === "shared"
+    next.recipe_id.startsWith("share:") &&
+    next.origin === "shared" &&
+    next.table_id != null
   ) {
-    next = { ...next, table_id: null };
+    // If table_id was set by a later pushCloudRecipe, recipe stays share:… but
+    // table_id is the user's own — keep it. We only clear when table_id equals
+    // the id embedded in share:{region}:{authorTableId} (import default).
+    const embedded = /^share:[^:]+:(\d+)$/.exec(next.recipe_id);
+    if (embedded && Number(embedded[1]) === Number(next.table_id)) {
+      next = { ...next, table_id: null };
+    }
+  }
+
+  // Heal missing table_id for account-synced rows: cloud:china:12345
+  if (next.table_id == null) {
+    const owned = parseOwnedTableIdFromRecipeId(next.recipe_id);
+    if (owned != null) next = { ...next, table_id: owned };
   }
   return next;
+}
+
+/** Account-owned cloud table id from recipe_id or explicit field. */
+export function resolveOwnedTableId(
+  entry: LocalRecipeEntry | null | undefined,
+): number | null {
+  if (!entry) return null;
+  if (entry.table_id != null && Number(entry.table_id) > 0) {
+    // share:{region}:{authorId} with same table_id is NOT owned
+    const embedded = /^share:[^:]+:(\d+)$/.exec(entry.recipe_id);
+    if (
+      entry.origin === "shared" &&
+      embedded &&
+      Number(embedded[1]) === Number(entry.table_id)
+    ) {
+      return null;
+    }
+    return Number(entry.table_id);
+  }
+  return parseOwnedTableIdFromRecipeId(entry.recipe_id);
+}
+
+function parseOwnedTableIdFromRecipeId(recipeId: string): number | null {
+  const m = /^cloud:(?:china|international):(\d+)$/i.exec(recipeId);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** True when this browser row maps to a recipe owned on the signed-in account. */
+export function isOwnedOnCloud(
+  entry: LocalRecipeEntry | null | undefined,
+): boolean {
+  if (!entry) return false;
+  if (entry.source === "official") return false;
+  const tid = resolveOwnedTableId(entry);
+  if (tid == null) return false;
+  // Host catalog must not be deleted via created-delete API
+  if (entry.origin === "coffee" || entry.origin === "tea" || entry.origin === "product") {
+    return false;
+  }
+  return (
+    entry.source === "user" ||
+    entry.origin === "created" ||
+    // Uploaded copy of a share import (own table_id differs from author embed)
+    (entry.source === "shared" && tid != null)
+  );
 }
 
 function ensureMigratedStore(): LocalRecipeEntry[] {
@@ -175,16 +234,13 @@ function ensureMigratedStore(): LocalRecipeEntry[] {
   const next = raw
     .map(migrateEntry)
     .filter((e): e is LocalRecipeEntry => e != null);
-  const needsWrite = raw.some(
-    (u) =>
-      u.recipe_id.startsWith("official:") ||
-      u.recipe_id.startsWith("starter:") ||
-      u.source === "cloud" ||
-      (u.source === "user" && u.origin === "shared") ||
-      ((u.source === "shared" || u.recipe_id.startsWith("share:")) &&
-        u.table_id != null &&
-        u.origin === "shared"),
-  );
+  const needsWrite =
+    raw.length !== next.length ||
+    raw.some((u, i) => {
+      const n = next.find((x) => x.recipe_id === u.recipe_id);
+      if (!n) return true;
+      return n.source !== u.source || n.table_id !== u.table_id;
+    });
   if (needsWrite) {
     writeUserRaw(next);
   }
