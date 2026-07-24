@@ -27,6 +27,10 @@ import {
   type BridgeState,
 } from "../api";
 import {
+  BrewConfirmDialog,
+  type BrewTarget,
+} from "../components/BrewConfirmDialog";
+import {
   Alert,
   Button,
   IconButton,
@@ -38,6 +42,10 @@ import {
 } from "../components/ui";
 import { classifyOperationalError } from "../lib/apiErrors";
 import { useI18n } from "../i18n/I18nContext";
+import {
+  findLocalRecipeForRebrew,
+  toLatestRevision,
+} from "../lib/localRecipes";
 import { isStaticDeploy } from "../lib/deploy";
 import { useMachine } from "../machine/MachineContext";
 import {
@@ -89,7 +97,7 @@ type EventsPollOpts = {
 };
 
 export default function Dashboard() {
-  const { t } = useI18n();
+  const { t, tPhase, tStatus, tMachineOrPhase } = useI18n();
   const { driver, bleSnapshot, bleSession, connectBle, disconnectBle } =
     useMachine();
   const webBle = driver === "web-bluetooth";
@@ -112,6 +120,7 @@ export default function Dashboard() {
   const [actionBusy, setActionBusy] = useState<ActionBusy>(null);
   const [staleMismatch, setStaleMismatch] = useState(false);
   const [eventSyncWarning, setEventSyncWarning] = useState<string | null>(null);
+  const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   /** Event observation failures are separate from status health/errors. */
   const [eventError, setEventError] = useState<string | null>(null);
   const [eventGuidance, setEventGuidance] = useState<string | null>(null);
@@ -719,6 +728,26 @@ export default function Dashboard() {
       ? stored.recipeRevisionId
       : null);
 
+  const completed = bleSnapshot.lastCompletedBrew;
+  const openRebrew = (revisionId: string | null, name: string | null) => {
+    const entry = findLocalRecipeForRebrew({
+      recipe_revision_id: revisionId,
+      recipe_name: name,
+    });
+    if (!entry) {
+      setActionError(t("dashboard.rebrewMissing"));
+      setActionGuidance(t("dashboard.rebrewMissingHint"));
+      return;
+    }
+    const rev = toLatestRevision(entry);
+    setBrewTarget({
+      recipeRevisionId: rev.revision_id,
+      content: entry.content,
+      revision: rev,
+      recipeName: entry.name,
+    });
+  };
+
   return (
     <div>
       <PageHeader
@@ -739,6 +768,63 @@ export default function Dashboard() {
           ) : null
         }
       />
+
+      {completed ? (
+        <Alert
+          tone={
+            completed.outcome === "completed"
+              ? "green"
+              : completed.outcome === "cancelled"
+                ? "amber"
+                : "blue"
+          }
+          className="mb-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="font-medium">
+                {completed.outcome === "completed"
+                  ? t("dashboard.brewDone")
+                  : completed.outcome === "cancelled"
+                    ? t("dashboard.brewCancelled")
+                    : t("dashboard.brewEnded")}
+              </div>
+              <p className="mt-0.5 text-sm opacity-90">
+                {completed.recipeName || t("dashboard.brewDoneAnon")}
+                {" · "}
+                {tMachineOrPhase(null, "terminal")}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                to="/history"
+                className="inline-flex h-8 items-center rounded-full border border-line bg-surface px-3 text-xs font-medium text-ink hover:bg-surface-2"
+              >
+                {t("dashboard.viewHistory")}
+              </Link>
+              <Button
+                size="sm"
+                variant="brand"
+                onClick={() =>
+                  openRebrew(
+                    completed.recipeRevisionId,
+                    completed.recipeName,
+                  )
+                }
+              >
+                {t("dashboard.brewAgain")}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => bleSession.clearLastCompletedBrew()}
+              >
+                {t("common.close")}
+              </Button>
+            </div>
+          </div>
+        </Alert>
+      ) : null}
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <Link
@@ -784,15 +870,34 @@ export default function Dashboard() {
                       : "neutral"
                 }
               >
-                {bleSnapshot.phase}
+                {tPhase(bleSnapshot.phase)}
               </StatusPill>
               {bleSnapshot.machineStateName ? (
-                <StatusPill tone="blue">{bleSnapshot.machineStateName}</StatusPill>
+                <StatusPill tone="blue">
+                  {tStatus(bleSnapshot.machineStateName)}
+                </StatusPill>
+              ) : null}
+              {bleSnapshot.hasPairedDevice ? (
+                <StatusPill tone="amber">
+                  {bleSnapshot.deviceName || "paired"}
+                </StatusPill>
               ) : null}
               {bleSnapshot.loaded ? (
                 <StatusPill tone="amber">recipe loaded</StatusPill>
               ) : null}
             </div>
+            {bleSnapshot.hasPairedDevice ? (
+              <p className="text-xs leading-relaxed text-ink-muted">
+                {bleSnapshot.needsChooserToRestore
+                  ? t("dashboard.pairNeedsChooser")
+                  : bleSnapshot.deviceName
+                    ? t("dashboard.pairedHint").replace(
+                        "{name}",
+                        bleSnapshot.deviceName,
+                      )
+                    : t("dashboard.pairedHintAnon")}
+              </p>
+            ) : null}
 
             {/* Live View–style machine hero + matrix readouts */}
             <div className="overflow-hidden rounded-2xl bg-surface-2">
@@ -810,7 +915,10 @@ export default function Dashboard() {
                       "xBloom [Studio]"}
                   </div>
                   <div className="mt-0.5 text-xs text-ink-faint">
-                    {bleSnapshot.machineStateName ?? bleSnapshot.phase}
+                    {tMachineOrPhase(
+                      bleSnapshot.machineStateName,
+                      bleSnapshot.phase,
+                    )}
                     {bleSnapshot.brewElapsedMs != null && liveBrewing
                       ? ` · ${formatElapsed(bleSnapshot.brewElapsedMs)}`
                       : ""}
@@ -906,6 +1014,9 @@ export default function Dashboard() {
                   onClick={() => {
                     bleSession.abortConnect();
                     setActionError(null);
+                    setActionGuidance(
+                      t("dashboard.connectRetryHint"),
+                    );
                   }}
                 >
                   {t("dashboard.cancelConnecting")}
@@ -914,22 +1025,45 @@ export default function Dashboard() {
                 bleSnapshot.phase === "disconnected" ||
                 bleSnapshot.phase === "error" ||
                 bleSnapshot.phase === "terminal" ? (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={actionBusy !== null}
-                  onClick={() => {
-                    // First await inside connect must be requestDevice (gesture).
-                    setActionError(null);
-                    void connectBle().catch((e) =>
-                      setActionError(
-                        e instanceof Error ? e.message : String(e),
-                      ),
-                    );
-                  }}
-                >
-                  {t("dashboard.connect")}
-                </Button>
+                <>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={actionBusy !== null}
+                    onClick={() => {
+                      // Reuses saved pair when possible; picker only on first pair.
+                      setActionError(null);
+                      setActionGuidance(null);
+                      void connectBle().catch((e) =>
+                        setActionError(
+                          e instanceof Error ? e.message : String(e),
+                        ),
+                      );
+                    }}
+                  >
+                    {bleSnapshot.hasPairedDevice
+                      ? t("dashboard.connectRemembered")
+                      : t("dashboard.connect")}
+                  </Button>
+                  {bleSnapshot.hasPairedDevice ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={actionBusy !== null}
+                      onClick={() => {
+                        setActionError(null);
+                        setActionGuidance(null);
+                        void connectBle({ forcePicker: true }).catch((e) =>
+                          setActionError(
+                            e instanceof Error ? e.message : String(e),
+                          ),
+                        );
+                      }}
+                    >
+                      {t("dashboard.pickOtherDevice")}
+                    </Button>
+                  ) : null}
+                </>
               ) : (
                 <Button
                   variant="secondary"
@@ -1310,6 +1444,16 @@ export default function Dashboard() {
           </div>
         )}
       </Panel>
+
+      <BrewConfirmDialog
+        open={!!brewTarget}
+        target={brewTarget}
+        onClose={() => setBrewTarget(null)}
+        onStarted={() => {
+          setBrewTarget(null);
+          bleSession.clearLastCompletedBrew();
+        }}
+      />
     </div>
   );
 }
@@ -1592,12 +1736,15 @@ function LiveTelemetryChart({
     dispensedWaterMl?: number | null;
   }>;
 }) {
+  const { t } = useI18n();
   const w = 320;
   const h = 72;
   const pad = 4;
   if (samples.length < 2) {
     return (
-      <p className="text-[11px] text-ink-faint">Collecting samples…</p>
+      <p className="text-[11px] text-ink-faint">
+        {t("dashboard.collectingTelemetry")}
+      </p>
     );
   }
   const xs = samples.map((s) => s.t);

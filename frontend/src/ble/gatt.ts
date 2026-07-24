@@ -33,6 +33,34 @@ export class BleGattError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Reject a hanging Chrome GATT promise (Windows often never settles). */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new BleGattError(
+          `${label} timed out after ${Math.round(ms / 1000)}s. Close the official App, keep Studio awake, then retry Connect (or Cancel connecting).`,
+          "timeout",
+        ),
+      );
+    }, ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 function bluetooth(): Bluetooth {
   const bt = (navigator as Navigator & { bluetooth?: Bluetooth }).bluetooth;
   if (!bt?.requestDevice) {
@@ -46,6 +74,75 @@ function bluetooth(): Bluetooth {
 
 function asErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+export type PermittedDevicesResult = {
+  devices: BluetoothDevice[];
+  /** True when navigator.bluetooth.getDevices exists. */
+  apiAvailable: boolean;
+  /** Set when getDevices threw (permission backend / browser quirk). */
+  error: string | null;
+};
+
+/**
+ * Devices this origin may use without opening the chooser (Chrome getDevices).
+ * Empty when never paired, permission revoked, or API unavailable.
+ *
+ * Note: after a full page reload, only getDevices can restore a BluetoothDevice.
+ * Same-tab disconnect/reconnect uses the in-memory object and does not need this.
+ */
+export async function getPermittedDevices(): Promise<PermittedDevicesResult> {
+  const bt = bluetooth();
+  if (typeof bt.getDevices !== "function") {
+    return { devices: [], apiAvailable: false, error: null };
+  }
+  try {
+    const devices = await bt.getDevices();
+    return {
+      devices: Array.isArray(devices) ? devices : [],
+      apiAvailable: true,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      devices: [],
+      apiAvailable: true,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Resolve a previously granted Studio without the device picker.
+ * Prefers ``preferredId`` (localStorage), then stored/advertised name, then
+ * single permitted device.
+ */
+export async function resolveRememberedStudioDevice(
+  preferredId?: string | null,
+  preferredName?: string | null,
+): Promise<BluetoothDevice | null> {
+  const { devices } = await getPermittedDevices();
+  if (devices.length === 0) return null;
+
+  if (preferredId) {
+    const byId = devices.find((d) => d.id === preferredId);
+    if (byId) return byId;
+  }
+
+  if (preferredName) {
+    const byExact = devices.find((d) => d.name === preferredName);
+    if (byExact) return byExact;
+  }
+
+  const byPrefix = devices.find((d) => {
+    const name = d.name ?? "";
+    return DEVICE_NAME_PREFIXES.some((p) => name.startsWith(p));
+  });
+  if (byPrefix) return byPrefix;
+
+  // Single permitted device is almost always the Studio after our first pair.
+  if (devices.length === 1) return devices[0] ?? null;
+  return null;
 }
 
 /**
@@ -123,12 +220,14 @@ function softDisconnect(device: BluetoothDevice): void {
  */
 export async function connectGatt(
   device: BluetoothDevice,
-  opts: { attempts?: number } = {},
+  opts: { attempts?: number; perAttemptMs?: number } = {},
 ): Promise<GattHandles> {
   if (!device.gatt) {
     throw new BleGattError("Device has no GATT server.", "no_gatt");
   }
-  const attempts = opts.attempts ?? 4;
+  // Fewer attempts + hard per-step timeouts so UI cannot hang forever on Windows.
+  const attempts = opts.attempts ?? 3;
+  const perAttemptMs = opts.perAttemptMs ?? 8_000;
 
   // Drop a half-open session so connect() always starts clean.
   softDisconnect(device);
@@ -137,7 +236,12 @@ export async function connectGatt(
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const server = await device.gatt.connect();
+      // gatt.connect() can hang indefinitely on Win+Chrome without a timeout.
+      const server = await withTimeout(
+        device.gatt.connect(),
+        perAttemptMs,
+        `GATT connect (try ${attempt + 1}/${attempts})`,
+      );
       // WinRT/Chrome often needs a beat before primary-service discovery.
       await sleep(180 + attempt * 120);
 
@@ -149,9 +253,21 @@ export async function connectGatt(
       }
 
       // Always resolve services from the live gatt server after connect.
-      const service = await device.gatt.getPrimaryService(SERVICE_UUID);
-      const command = await service.getCharacteristic(CHAR_COMMAND);
-      const status = await service.getCharacteristic(CHAR_STATUS);
+      const service = await withTimeout(
+        device.gatt.getPrimaryService(SERVICE_UUID),
+        perAttemptMs,
+        `GATT getPrimaryService (try ${attempt + 1}/${attempts})`,
+      );
+      const command = await withTimeout(
+        service.getCharacteristic(CHAR_COMMAND),
+        5_000,
+        "GATT getCharacteristic(command)",
+      );
+      const status = await withTimeout(
+        service.getCharacteristic(CHAR_STATUS),
+        5_000,
+        "GATT getCharacteristic(status)",
+      );
 
       if (!device.gatt.connected) {
         throw new BleGattError(
@@ -172,7 +288,9 @@ export async function connectGatt(
   const hint =
     /disconnected|GATT Server is disconnected/i.test(msg)
       ? " Connection dropped while reading services — keep the Studio awake, close the official App, and retry Connect."
-      : "";
+      : /timeout/i.test(msg)
+        ? " Try Cancel connecting, power-cycle Studio, close the official App, then Connect again."
+        : "";
   throw new BleGattError(
     `Could not open Studio GATT after ${attempts} tries: ${msg}.${hint}`,
     "connect_failed",

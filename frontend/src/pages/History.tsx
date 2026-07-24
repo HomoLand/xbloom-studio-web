@@ -4,8 +4,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Cloud, Trash2 } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Cloud, Download, Play, Trash2 } from "lucide-react";
+import {
+  BrewConfirmDialog,
+  type BrewTarget,
+} from "../components/BrewConfirmDialog";
 import {
   Alert,
   Button,
@@ -13,12 +17,17 @@ import {
   IconButton,
   PageHeader,
   Panel,
+  Segmented,
   StatusPill,
+  TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
 import {
   clearLocalHistory,
+  exportHistoryCsv,
+  exportHistoryJson,
+  filterLocalHistory,
   getLocalHistoryEvent,
   historyStatus,
   importCloudBrewRecords,
@@ -26,6 +35,11 @@ import {
   type LocalHistoryEvent,
   type TelemetrySample,
 } from "../lib/localHistory";
+import {
+  findLocalRecipeForRebrew,
+  toLatestRevision,
+} from "../lib/localRecipes";
+import { downloadText } from "../lib/recipeIo";
 import { CloudError, fetchCloudBrewRecords } from "../lib/xbloomCloud";
 import { shortId } from "../lib/recipeDomain";
 
@@ -44,12 +58,19 @@ const OUTCOME_TONE: Record<
 
 export default function History() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [events, setEvents] = useState<LocalHistoryEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "coffee" | "tea">("all");
+  const [outcomeFilter, setOutcomeFilter] = useState<
+    "all" | "completed" | "failed"
+  >("all");
+  const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
 
   const reload = useCallback(() => {
     setEvents(listLocalHistory(200));
@@ -61,9 +82,18 @@ export default function History() {
   }, [reload]);
 
   const status = useMemo(() => historyStatus(), [tick, events]);
+  const filtered = useMemo(
+    () =>
+      filterLocalHistory(events, {
+        query,
+        kind: kindFilter,
+        outcome: outcomeFilter,
+      }),
+    [events, query, kindFilter, outcomeFilter],
+  );
   const selected = selectedId
     ? getLocalHistoryEvent(selectedId) ??
-      events.find((e) => e.event_id === selectedId) ??
+      filtered.find((e) => e.event_id === selectedId) ??
       null
     : null;
 
@@ -93,16 +123,56 @@ export default function History() {
       );
       reload();
     } catch (e) {
-      setError(
+      const msg =
         e instanceof CloudError
           ? e.message
           : e instanceof Error
             ? e.message
-            : String(e),
-      );
+            : String(e);
+      // Friendlier session / network hints for ordinary users.
+      if (/password|auth|login|401|403/i.test(msg)) {
+        setError(t("cloud.sessionExpired"));
+      } else if (/network|fetch|cors|failed to fetch/i.test(msg)) {
+        setError(t("cloud.networkError"));
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
+  };
+
+  const openRebrew = (event: LocalHistoryEvent) => {
+    setError(null);
+    const entry = findLocalRecipeForRebrew({
+      recipe_revision_id: event.recipe_revision_id,
+      recipe_name: event.recipe_name,
+    });
+    if (!entry) {
+      setError(t("history.rebrewMissing"));
+      return;
+    }
+    const rev = toLatestRevision(entry);
+    setBrewTarget({
+      recipeRevisionId: rev.revision_id,
+      content: entry.content,
+      revision: rev,
+      recipeName: entry.name,
+    });
+  };
+
+  const onExport = (fmt: "json" | "csv") => {
+    const payload =
+      fmt === "json"
+        ? exportHistoryJson(filtered)
+        : exportHistoryCsv(filtered);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadText(
+      `xbloom-history-${stamp}.${fmt}`,
+      payload,
+      fmt === "json" ? "application/json" : "text/csv",
+    );
+    setInfo(t("history.exportDone").replace("{n}", String(filtered.length)));
   };
 
   return (
@@ -121,6 +191,26 @@ export default function History() {
               <Cloud className="h-3.5 w-3.5" aria-hidden />
               {busy ? t("common.loading") : t("history.sync")}
             </Button>
+            {filtered.length > 0 ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onExport("json")}
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  JSON
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onExport("csv")}
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  CSV
+                </Button>
+              </>
+            ) : null}
             {events.length > 0 ? (
               <IconButton
                 label={t("history.clear")}
@@ -152,6 +242,17 @@ export default function History() {
       {error ? (
         <Alert tone="red" className="mb-4">
           {error}
+          {/session|设置|Settings|password/i.test(error) ? (
+            <div className="mt-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => navigate("/settings")}
+              >
+                {t("cloud.openSettings")}
+              </Button>
+            </div>
+          ) : null}
         </Alert>
       ) : null}
       {info ? (
@@ -179,16 +280,54 @@ export default function History() {
         />
       </div>
 
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <TextInput
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("history.searchPlaceholder")}
+          className="sm:max-w-xs"
+        />
+        <Segmented
+          ariaLabel={t("history.filterKind")}
+          value={kindFilter}
+          onChange={setKindFilter}
+          options={[
+            { value: "all", label: t("history.filterAll") },
+            { value: "coffee", label: t("history.filterCoffee") },
+            { value: "tea", label: t("history.filterTea") },
+          ]}
+        />
+        <Segmented
+          ariaLabel={t("history.filterOutcome")}
+          value={outcomeFilter}
+          onChange={setOutcomeFilter}
+          options={[
+            { value: "all", label: t("history.filterOutcomeAll") },
+            { value: "completed", label: t("history.completed") },
+            { value: "failed", label: t("history.failed") },
+          ]}
+        />
+        <span className="text-xs text-ink-faint">
+          {t("history.showing")
+            .replace("{n}", String(filtered.length))
+            .replace("{total}", String(events.length))}
+        </span>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         <Panel title={t("history.list")}>
-          {events.length === 0 ? (
+          {filtered.length === 0 ? (
             <EmptyState
               title={t("history.empty")}
-              description={t("history.emptyHint")}
+              description={
+                events.length
+                  ? t("history.emptyFilter")
+                  : t("history.emptyHint")
+              }
             />
           ) : (
             <ul className="space-y-1">
-              {events.map((e) => {
+              {filtered.map((e) => {
                 const active = e.event_id === selectedId;
                 return (
                   <li key={e.event_id}>
@@ -205,7 +344,7 @@ export default function History() {
                         <StatusPill
                           tone={OUTCOME_TONE[e.outcome] ?? "neutral"}
                         >
-                          {e.outcome}
+                          {outcomeLabel(t, e.outcome)}
                         </StatusPill>
                         {e.source === "app-cloud" ? (
                           <StatusPill tone="amber">
@@ -220,9 +359,8 @@ export default function History() {
                       </div>
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-ink-faint">
                         <span>
-                          {e.source}
+                          {e.kind || "—"}
                           {e.dose_g != null ? ` · ${e.dose_g}g` : ""}
-                          {e.brew_time_s != null ? ` · ${e.brew_time_s}s` : ""}
                           {e.telemetry?.length
                             ? ` · ${e.telemetry.length} pts`
                             : ""}
@@ -241,22 +379,50 @@ export default function History() {
           {!selected ? (
             <p className="text-sm text-ink-muted">{t("history.selectHint")}</p>
           ) : (
-            <HistoryDetail event={selected} />
+            <HistoryDetail event={selected} onRebrew={openRebrew} />
           )}
         </Panel>
       </div>
+
+      <BrewConfirmDialog
+        open={!!brewTarget}
+        target={brewTarget}
+        onClose={() => setBrewTarget(null)}
+        onStarted={() => {
+          setBrewTarget(null);
+          navigate("/");
+        }}
+      />
     </div>
   );
 }
 
-function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
-  const { t } = useI18n();
+function outcomeLabel(
+  t: (k: string, f?: string) => string,
+  outcome: string,
+): string {
+  const key = `history.outcome.${outcome}`;
+  const labeled = t(key);
+  return labeled === key ? outcome : labeled;
+}
+
+function HistoryDetail({
+  event,
+  onRebrew,
+}: {
+  event: LocalHistoryEvent;
+  onRebrew: (e: LocalHistoryEvent) => void;
+}) {
+  const { t, tStatus } = useI18n();
   const samples = event.telemetry ?? [];
+  const canRebrew = Boolean(
+    event.recipe_revision_id || event.recipe_name,
+  );
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap items-center gap-1.5">
         <StatusPill tone={OUTCOME_TONE[event.outcome] ?? "neutral"}>
-          {event.outcome}
+          {outcomeLabel(t, event.outcome)}
         </StatusPill>
         {event.kind ? (
           <StatusPill tone="neutral">{event.kind}</StatusPill>
@@ -265,6 +431,16 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
           <StatusPill tone="amber">{t("history.cloudBadge")}</StatusPill>
         ) : null}
       </div>
+      {canRebrew ? (
+        <Button
+          size="sm"
+          variant="brand"
+          onClick={() => onRebrew(event)}
+        >
+          <Play className="h-3.5 w-3.5" aria-hidden />
+          {t("history.brewAgain")}
+        </Button>
+      ) : null}
       <dl className="grid gap-1.5 sm:grid-cols-2 text-ink-muted">
         <div>
           {t("history.when")}{" "}
@@ -337,9 +513,15 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
                 <thead className="sticky top-0 bg-surface-2 text-ink-muted">
                   <tr>
                     <th className="px-2 py-1 font-medium">t (s)</th>
-                    <th className="px-2 py-1 font-medium">state</th>
-                    <th className="px-2 py-1 font-medium">cup g</th>
-                    <th className="px-2 py-1 font-medium">H₂O ml</th>
+                    <th className="px-2 py-1 font-medium">
+                      {t("dashboard.phase")}
+                    </th>
+                    <th className="px-2 py-1 font-medium">
+                      {t("dashboard.cup")}
+                    </th>
+                    <th className="px-2 py-1 font-medium">
+                      {t("dashboard.water")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -349,7 +531,11 @@ function HistoryDetail({ event }: { event: LocalHistoryEvent }) {
                         {(s.t / 1000).toFixed(1)}
                       </td>
                       <td className="px-2 py-0.5">
-                        {s.stateName ?? s.state ?? "—"}
+                        {s.stateName
+                          ? tStatus(s.stateName)
+                          : s.state != null
+                            ? String(s.state)
+                            : "—"}
                       </td>
                       <td className="px-2 py-0.5 tabular-nums">
                         {s.cupWeightG != null ? s.cupWeightG.toFixed(1) : "—"}
@@ -398,15 +584,15 @@ function TelemetrySpark({ samples }: { samples: TelemetrySample[] }) {
   return (
     <svg
       viewBox={`0 0 ${w} ${h}`}
-      className="w-full rounded-xl border border-line bg-surface-2"
+      className="h-20 w-full rounded-xl bg-surface-2"
       role="img"
-      aria-label="Telemetry chart"
+      aria-label="telemetry"
     >
       <path
         d={pathFor(water, wMax)}
         fill="none"
         stroke="var(--color-chart-water)"
-        strokeWidth="1.75"
+        strokeWidth="1.5"
       />
       <path
         d={pathFor(cup, cMax)}
@@ -420,17 +606,20 @@ function TelemetrySpark({ samples }: { samples: TelemetrySample[] }) {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-2xl border border-line bg-surface p-3.5">
-      <div className="font-matrix text-2xl text-ink">{value}</div>
-      <div className="mt-0.5 text-xs text-ink-muted">{label}</div>
+    <div className="rounded-2xl border border-line bg-surface px-3 py-3">
+      <div className="text-[11px] text-ink-faint">{label}</div>
+      <div className="mt-0.5 text-xl font-semibold tabular-nums text-ink">
+        {value}
+      </div>
     </div>
   );
 }
 
-function formatWhen(iso?: string): string {
-  if (!iso) return "";
+function formatWhen(iso: string): string {
   try {
-    return new Date(iso).toLocaleString();
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString();
   } catch {
     return iso;
   }

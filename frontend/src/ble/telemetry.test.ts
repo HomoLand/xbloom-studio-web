@@ -49,18 +49,34 @@ describe("parseNotification status states", () => {
     assert.equal(parseNotification(bad), null);
     assert.equal(notificationFrameIsValid(hex(bad)), false);
   });
+
+  it("maps 0x45 tea soak as active brew (not unknown)", async () => {
+    const { STATE_NAMES, isActedBrewState } = await import("./telemetry.ts");
+    assert.equal(STATE_NAMES[0x45], "tea_soaking");
+    assert.equal(isActedBrewState(0x45), true);
+    assert.equal(isActedBrewState(0x10), true);
+    assert.equal(isActedBrewState(0x01), false);
+  });
 });
 
 describe("parseNotification scale/water", () => {
   it("decodes cup weight grams", () => {
     const ev = parseNotification(FIXTURES.cup)!;
-    assert.equal(ev.stateName, "scale");
+    assert.equal(ev.stateName, "cup_weight");
     assert.equal(ev.cupWeightG, 123.45);
   });
 
   it("decodes dispensed water ml", () => {
     const ev = parseNotification(FIXTURES.water)!;
+    assert.equal(ev.stateName, "water_volume");
     assert.equal(ev.dispensedWaterMl, 50);
+  });
+
+  it("names FreeSolo-style report ACKs instead of bare unknown", async () => {
+    const { REPORT_NAMES } = await import("./telemetry.ts");
+    assert.equal(REPORT_NAMES[9005], "brewer_started");
+    assert.equal(REPORT_NAMES[9006], "brewer_exited");
+    assert.equal(REPORT_NAMES[10507], "scale_weight");
   });
 });
 

@@ -16,14 +16,22 @@ Live SPA (Chrome + Web Bluetooth, no local backend required for brew/recipes/his
 
 1. **Close the official xBloom App** (only one BLE client).
 2. Open the Pages URL in **Chrome** (HTTPS / secure context).
-3. **Dashboard → Connect Studio** (first time: browser device picker).
-4. **Recipes** → pick coffee or tea (filter/search) → **Brew** → type the safety phrase:
-   - Coffee: `cup-filter-water-beans`
-   - Tea: `tea-brewer-water-cup-clear`
-5. Optional: **Settings** → save account session (password is tab-only) → sync catalog / brew history; configure AI for Design.
+3. **Dashboard → Connect Studio** once (browser device picker). The site stores the device id for this origin.
+4. **Same tab**: disconnect/reconnect and later brews reuse the in-memory device (no picker). **After a full page reload**, Chrome may still require **one** chooser click if `getDevices()` does not restore the grant (common Web Bluetooth limit); after that, same-tab reconnect is silent again. Brew **auto-connects** when possible and **releases BLE** when finished.
+5. Optional: **Settings** → save account session (password is tab-only) → sync catalog / brew history; configure AI for Design. Use **Forget device** / **Change device** to re-pick.
 6. Optional: Recipes bottom **A/B/C slots** — choose three coffee recipes and write Easy-Mode presets (PRO batch).
 
 There is **no one-tap sample brew** on Dashboard; always choose a recipe on the Recipes page.
+
+### Recipe sources
+
+| Source | What it is |
+| --- | --- |
+| **official / starter** | Bundled starter templates (hot/flash coffee + green/oolong/black/jasmine/silver-needle tea). Not test placeholders — you can edit a copy or ignore them. |
+| **user / design** | Saved in this browser (`localStorage`). |
+| **cloud** | Pulled from your xBloom account (Settings → account session). |
+
+After a brew finishes, Dashboard shows a complete banner with **View history** and **Brew again**. History supports filter, export JSON/CSV, and re-brew.
 
 ### Machine drivers (progressive)
 

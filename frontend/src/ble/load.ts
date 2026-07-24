@@ -254,6 +254,11 @@ export function buildStatusQuery(): Uint8Array {
   return xbloomFrame(0x56, LOAD_SEQ, new Uint8Array([0x01]));
 }
 
+/** Session-start frame (0xa4) — required before tea/coffee load on a fresh link. */
+export function buildSessionStart(): Uint8Array {
+  return xbloomFrame(0xa4, LOAD_SEQ, buildA4());
+}
+
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.replace(/\s+/g, "").toLowerCase();
   const out = new Uint8Array(clean.length / 2);

@@ -157,6 +157,112 @@ export function clearLocalHistory(): void {
   localStorage.removeItem(KEY);
 }
 
+/** Filter helpers for History UI. */
+export function filterLocalHistory(
+  events: LocalHistoryEvent[],
+  opts: {
+    query?: string;
+    kind?: "all" | "coffee" | "tea" | string;
+    outcome?: "all" | "completed" | "failed" | string;
+    source?: "all" | "web-bluetooth" | "app-cloud" | string;
+  },
+): LocalHistoryEvent[] {
+  const q = (opts.query || "").trim().toLowerCase();
+  const kind = opts.kind || "all";
+  const outcome = opts.outcome || "all";
+  const source = opts.source || "all";
+  return events.filter((e) => {
+    if (kind === "tea") {
+      if ((e.kind || "").toLowerCase() !== "tea") return false;
+    } else if (kind === "coffee") {
+      const k = (e.kind || "").toLowerCase();
+      if (k === "tea") return false;
+    } else if (kind !== "all" && kind) {
+      if ((e.kind || "").toLowerCase() !== kind.toLowerCase()) return false;
+    }
+    if (outcome === "failed") {
+      if (e.outcome !== "failed" && e.outcome !== "cancelled") return false;
+    } else if (outcome !== "all" && outcome) {
+      if (e.outcome !== outcome) return false;
+    }
+    if (source !== "all" && source) {
+      if (e.source !== source) return false;
+    }
+    if (q) {
+      const hay = [
+        e.recipe_name,
+        e.kind,
+        e.outcome,
+        e.source,
+        e.note,
+        e.machine,
+        e.workflow_id,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+export function exportHistoryJson(events: LocalHistoryEvent[]): string {
+  return JSON.stringify(
+    {
+      format: "xbloom-studio-web-history",
+      version: 1,
+      exported_at: new Date().toISOString(),
+      count: events.length,
+      events,
+    },
+    null,
+    2,
+  );
+}
+
+export function exportHistoryCsv(events: LocalHistoryEvent[]): string {
+  const cols = [
+    "recorded_at",
+    "outcome",
+    "source",
+    "recipe_name",
+    "kind",
+    "dose_g",
+    "brew_time_s",
+    "machine",
+    "workflow_id",
+    "recipe_revision_id",
+    "telemetry_points",
+  ];
+  const esc = (v: unknown) => {
+    const s = v == null ? "" : String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [cols.join(",")];
+  for (const e of events) {
+    lines.push(
+      [
+        e.recorded_at,
+        e.outcome,
+        e.source,
+        e.recipe_name,
+        e.kind,
+        e.dose_g,
+        e.brew_time_s,
+        e.machine,
+        e.workflow_id,
+        e.recipe_revision_id,
+        e.telemetry?.length ?? 0,
+      ]
+        .map(esc)
+        .join(","),
+    );
+  }
+  return lines.join("\n");
+}
+
 /** Parse App lineChartData into coarse telemetry when possible. */
 export function parseLineChartTelemetry(
   raw: string | null | undefined,

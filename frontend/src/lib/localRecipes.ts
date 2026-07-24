@@ -94,6 +94,43 @@ export function getLocalRecipe(recipeId: string): LocalRecipeEntry | null {
   return listAllLocalRecipes().find((r) => r.recipe_id === recipeId) ?? null;
 }
 
+/** Resolve ``recipe_id:rev1`` or bare recipe_id to a local entry. */
+export function getLocalRecipeByRevisionId(
+  revisionId: string | null | undefined,
+): LocalRecipeEntry | null {
+  if (!revisionId) return null;
+  const id = revisionId.trim();
+  if (!id) return null;
+  if (id.endsWith(":rev1")) {
+    return getLocalRecipe(id.slice(0, -":rev1".length));
+  }
+  const direct = getLocalRecipe(id);
+  if (direct) return direct;
+  return (
+    listAllLocalRecipes().find(
+      (r) => `${r.recipe_id}:rev1` === id || r.recipe_id === id,
+    ) ?? null
+  );
+}
+
+/** Find a recipe for “brew again” from history metadata. */
+export function findLocalRecipeForRebrew(opts: {
+  recipe_revision_id?: string | null;
+  recipe_name?: string | null;
+}): LocalRecipeEntry | null {
+  const byRev = getLocalRecipeByRevisionId(opts.recipe_revision_id ?? null);
+  if (byRev) return byRev;
+  const name = (opts.recipe_name || "").trim();
+  if (!name) return null;
+  const all = listAllLocalRecipes();
+  return (
+    all.find((r) => r.name === name) ??
+    all.find((r) => recipeDisplayName(r.content) === name) ??
+    all.find((r) => r.name.includes(name) || name.includes(r.name)) ??
+    null
+  );
+}
+
 export function toRecipeRecord(entry: LocalRecipeEntry): RecipeRecord {
   const rev = toLatestRevision(entry);
   return {

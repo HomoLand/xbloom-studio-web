@@ -24,7 +24,7 @@ const official: OfficialSeed[] = [
       "water_ml": 240,
       "hot_water_ml": 240,
       "time": "2:30-3:05",
-      "note": "xBloom 风格起始配方（Skill 模板），可按豆子微调。",
+      "note": "内置起始模板（Skill 风格），可按豆子微调。非测试占位。",
       "pours": [
         { "label": "Bloom", "ml": 45, "temp_c": 92, "pattern": "spiral", "vibration": "after", "pause_s": 35, "rpm": 90, "flow_ml_s": 3.0 },
         { "label": "Main", "ml": 105, "temp_c": 92, "pattern": "spiral", "vibration": "none", "pause_s": 10, "rpm": 90, "flow_ml_s": 3.2 },
@@ -48,7 +48,7 @@ const official: OfficialSeed[] = [
       "hot_water_ml": 150,
       "ice_g": 90,
       "time": "2:00-2:40",
-      "note": "接杯预放 90g 冰，机器按热冲程序出热液。",
+      "note": "接杯预放 90g 冰。内置起始模板。",
       "pours": [
         { "label": "Bloom", "ml": 40, "temp_c": 94, "pattern": "spiral", "vibration": "after", "pause_s": 35, "rpm": 100, "flow_ml_s": 3.0 },
         { "label": "Main", "ml": 60, "temp_c": 93, "pattern": "spiral", "vibration": "none", "pause_s": 8, "rpm": 100, "flow_ml_s": 3.2 },
@@ -71,7 +71,7 @@ const official: OfficialSeed[] = [
       "water_ml": 248,
       "hot_water_ml": 248,
       "time": "2:40-3:20",
-      "note": "略粗研磨、偏高水温，适合浅烘水果调。",
+      "note": "略粗研磨、偏高水温。内置起始模板。",
       "pours": [
         { "label": "Bloom", "ml": 50, "temp_c": 94, "pattern": "spiral", "vibration": "both", "pause_s": 40, "rpm": 85, "flow_ml_s": 2.8 },
         { "label": "Main", "ml": 110, "temp_c": 93, "pattern": "spiral", "vibration": "none", "pause_s": 12, "rpm": 85, "flow_ml_s": 3.0 },
@@ -94,7 +94,7 @@ const official: OfficialSeed[] = [
       "water_ml": 240,
       "hot_water_ml": 240,
       "time": "2:20-2:55",
-      "note": "略细研磨、中等流速，突出焦糖/巧克力甜感。",
+      "note": "略细研磨、中等流速。内置起始模板。",
       "pours": [
         { "label": "Bloom", "ml": 48, "temp_c": 91, "pattern": "spiral", "vibration": "after", "pause_s": 30, "rpm": 95, "flow_ml_s": 3.0 },
         { "label": "Main", "ml": 100, "temp_c": 90, "pattern": "spiral", "vibration": "none", "pause_s": 8, "rpm": 95, "flow_ml_s": 3.4 },
@@ -104,7 +104,7 @@ const official: OfficialSeed[] = [
   },
   {
     "recipe_id": "official:tea-green",
-    "name": "官方·绿茶（茶程序）",
+    "name": "官方·绿茶",
     "kind": "tea",
     "source": "official",
     "content": {
@@ -113,8 +113,61 @@ const official: OfficialSeed[] = [
       "leaf_g": 4,
       "output_ml_per_steep": 120,
       "pours": [
-        { "label": "Steep 1", "ml": 80, "temp_c": 85, "pattern": "center", "pause_s": 25, "flow_ml_s": 3.0 },
-        { "label": "Steep 2", "ml": 100, "temp_c": 85, "pattern": "center", "pause_s": 20, "flow_ml_s": 3.0 }
+        { "label": "一泡", "ml": 80, "temp_c": 85, "pattern": "center", "pause_s": 25, "flow_ml_s": 3.0 },
+        { "label": "二泡", "ml": 100, "temp_c": 85, "pattern": "center", "pause_s": 20, "flow_ml_s": 3.0 },
+        { "label": "三泡", "ml": 100, "temp_c": 85, "pattern": "center", "pause_s": 25, "flow_ml_s": 3.0 }
+      ]
+    }
+  },
+  {
+    "recipe_id": "official:tea-oolong",
+    "name": "官方·乌龙",
+    "kind": "tea",
+    "source": "official",
+    "content": {
+      "name": "官方·乌龙",
+      "kind": "tea",
+      "leaf_g": 5,
+      "output_ml_per_steep": 120,
+      "pours": [
+        { "label": "醒茶", "ml": 90, "temp_c": 95, "pattern": "circular", "pause_s": 20, "flow_ml_s": 3.5 },
+        { "label": "二泡", "ml": 100, "temp_c": 95, "pattern": "circular", "pause_s": 25, "flow_ml_s": 3.5 },
+        { "label": "三泡", "ml": 100, "temp_c": 96, "pattern": "circular", "pause_s": 30, "flow_ml_s": 3.5 },
+        { "label": "四泡", "ml": 100, "temp_c": 96, "pattern": "circular", "pause_s": 35, "flow_ml_s": 3.5 }
+      ]
+    }
+  },
+  {
+    "recipe_id": "official:tea-black",
+    "name": "官方·红茶",
+    "kind": "tea",
+    "source": "official",
+    "content": {
+      "name": "官方·红茶",
+      "kind": "tea",
+      "leaf_g": 4,
+      "output_ml_per_steep": 130,
+      "pours": [
+        { "label": "一泡", "ml": 100, "temp_c": 92, "pattern": "center", "pause_s": 30, "flow_ml_s": 3.2 },
+        { "label": "二泡", "ml": 110, "temp_c": 92, "pattern": "center", "pause_s": 35, "flow_ml_s": 3.2 },
+        { "label": "三泡", "ml": 110, "temp_c": 93, "pattern": "circular", "pause_s": 40, "flow_ml_s": 3.2 }
+      ]
+    }
+  },
+  {
+    "recipe_id": "official:tea-jasmine",
+    "name": "官方·茉莉花茶",
+    "kind": "tea",
+    "source": "official",
+    "content": {
+      "name": "官方·茉莉花茶",
+      "kind": "tea",
+      "leaf_g": 4,
+      "output_ml_per_steep": 120,
+      "pours": [
+        { "label": "一泡", "ml": 90, "temp_c": 88, "pattern": "center", "pause_s": 25, "flow_ml_s": 3.0 },
+        { "label": "二泡", "ml": 100, "temp_c": 88, "pattern": "center", "pause_s": 28, "flow_ml_s": 3.0 },
+        { "label": "三泡", "ml": 100, "temp_c": 90, "pattern": "circular", "pause_s": 30, "flow_ml_s": 3.0 }
       ]
     }
   },

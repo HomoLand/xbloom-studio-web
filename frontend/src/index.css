@@ -153,6 +153,9 @@ body::before {
 .bg-accent-amber\/12 {
   background-color: color-mix(in srgb, var(--color-accent-amber) 12%, transparent);
 }
+.bg-accent-red {
+  background-color: var(--color-accent-red);
+}
 .bg-accent-red\/8 {
   background-color: color-mix(in srgb, var(--color-accent-red) 8%, transparent);
 }

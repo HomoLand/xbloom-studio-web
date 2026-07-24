@@ -31,7 +31,7 @@ function asCoffee(c: RecipeContent | undefined): CoffeeRecipeContent | null {
 }
 
 export function SlotProgrammer() {
-  const { t } = useI18n();
+  const { t, tPhase, tStatus } = useI18n();
   const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
   const options = useMemo(() => coffeeEntries(), []);
   const firstId = options[0]?.recipe_id ?? "";
@@ -162,9 +162,9 @@ export function SlotProgrammer() {
         ) : null}
         {bleSnapshot.phase !== "idle" && bleSnapshot.phase !== "disconnected" ? (
           <StatusPill tone="blue">
-            BLE {bleSnapshot.phase}
+            {tPhase(bleSnapshot.phase)}
             {bleSnapshot.machineStateName
-              ? ` · ${bleSnapshot.machineStateName}`
+              ? ` · ${tStatus(bleSnapshot.machineStateName)}`
               : ""}
           </StatusPill>
         ) : null}

@@ -5,6 +5,8 @@
 
 interface Bluetooth {
   requestDevice(options?: RequestDeviceOptions): Promise<BluetoothDevice>;
+  /** Previously permitted devices for this origin (no picker). Chrome 85+. */
+  getDevices?(): Promise<BluetoothDevice[]>;
   getAvailability?(): Promise<boolean>;
 }
 

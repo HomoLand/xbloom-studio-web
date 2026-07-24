@@ -28,8 +28,9 @@ type MachineContextValue = {
   webBluetooth: WebBluetoothCapability;
   bleSession: WebBleSession;
   bleSnapshot: SessionSnapshot;
-  connectBle: () => Promise<void>;
+  connectBle: (opts?: { forcePicker?: boolean }) => Promise<void>;
   disconnectBle: () => Promise<void>;
+  forgetBleDevice: () => Promise<void>;
 };
 
 const MachineContext = createContext<MachineContextValue | null>(null);
@@ -62,6 +63,11 @@ export function MachineProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => bleSession.subscribe(setBleSnapshot), [bleSession]);
 
+  // Restore Chrome-permitted Studio after reload (no picker, no GATT yet).
+  useEffect(() => {
+    void bleSession.hydratePairedDevice();
+  }, [bleSession]);
+
   const setDriver = useCallback(
     (next: MachineDriver) => {
       if (next !== "web-bluetooth" && bleSession.snapshot().phase !== "idle") {
@@ -73,15 +79,23 @@ export function MachineProvider({ children }: { children: ReactNode }) {
     [bleSession],
   );
 
-  const connectBle = useCallback(async () => {
-    if (driver !== "web-bluetooth") {
-      throw new Error("Switch machine driver to Web Bluetooth first.");
-    }
-    await bleSession.connect();
-  }, [bleSession, driver]);
+  const connectBle = useCallback(
+    async (opts?: { forcePicker?: boolean }) => {
+      if (driver !== "web-bluetooth") {
+        throw new Error("Switch machine driver to Web Bluetooth first.");
+      }
+      // Reuses saved pair when possible; forcePicker opens the chooser again.
+      await bleSession.connect(opts);
+    },
+    [bleSession, driver],
+  );
 
   const disconnectBle = useCallback(async () => {
     await bleSession.disconnect();
+  }, [bleSession]);
+
+  const forgetBleDevice = useCallback(async () => {
+    await bleSession.forgetDevice();
   }, [bleSession]);
 
   const value = useMemo<MachineContextValue>(
@@ -93,6 +107,7 @@ export function MachineProvider({ children }: { children: ReactNode }) {
       bleSnapshot,
       connectBle,
       disconnectBle,
+      forgetBleDevice,
     }),
     [
       driver,
@@ -102,6 +117,7 @@ export function MachineProvider({ children }: { children: ReactNode }) {
       bleSnapshot,
       connectBle,
       disconnectBle,
+      forgetBleDevice,
     ],
   );
 

@@ -9,7 +9,6 @@ import {
   assertNoHorizontalOverflow,
   BAG_IMAGE,
   BOOTSTRAP_ORIGIN,
-  COFFEE_START_CONFIRMATION,
   createPairingToken,
   e2eComplete,
   e2eGetLedger,
@@ -65,10 +64,9 @@ async function brewFromDesignPage(page: Page): Promise<{
   await expect(page.getByText(/dose/i).first()).toBeVisible();
   await expect(page.getByText(/pours/i).first()).toBeVisible();
 
-  const phrase = page.locator("#brew-confirm-phrase");
-  await phrase.fill(COFFEE_START_CONFIRMATION);
-  await expect(phrase).toHaveValue(COFFEE_START_CONFIRMATION);
-  const startBtn = page.getByRole("button", { name: /load and start/i });
+  const startBtn = page.getByRole("button", {
+    name: /confirm and start brew|load and start|确认并开始/i,
+  });
   await expect(startBtn).toBeEnabled();
   await startBtn.click();
 

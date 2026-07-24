@@ -16,7 +16,7 @@ import { cx, StatusPill } from "./ui";
 export function AppShell() {
   const { mode, session, config } = useAuth();
   const { driver, bleSnapshot } = useMachine();
-  const { t } = useI18n();
+  const { t, tPhase, tStatus } = useI18n();
 
   const NAV_ITEMS = [
     { to: "/", label: t("nav.dashboard"), icon: LayoutDashboard, end: true as const },
@@ -49,15 +49,19 @@ export function AppShell() {
           </div>
           {driver === "web-bluetooth" ? (
             <div className="mt-2 rounded-xl bg-surface-2 px-2.5 py-2 text-[11px] leading-snug text-ink-muted">
-              <span className="text-brand">{bleSnapshot.phase}</span>
-              {bleSnapshot.machineStateName
-                ? ` · ${bleSnapshot.machineStateName}`
+              <span className="text-brand">{tPhase(bleSnapshot.phase)}</span>
+              {bleSnapshot.machineStateName &&
+              !bleSnapshot.machineStateName.startsWith("status_0x") &&
+              !bleSnapshot.machineStateName.startsWith("unknown")
+                ? ` · ${tStatus(bleSnapshot.machineStateName)}`
                 : ""}
-              {bleSnapshot.cupWeightG != null
-                ? ` · ${bleSnapshot.cupWeightG}g`
-                : ""}
+              {bleSnapshot.scaleG != null
+                ? ` · ${bleSnapshot.scaleG}g`
+                : bleSnapshot.cupWeightG != null
+                  ? ` · ${bleSnapshot.cupWeightG}g`
+                  : ""}
               {bleSnapshot.dispensedWaterMl != null
-                ? ` · ${bleSnapshot.dispensedWaterMl}ml`
+                ? ` · ${Math.round(bleSnapshot.dispensedWaterMl)}ml`
                 : ""}
             </div>
           ) : null}

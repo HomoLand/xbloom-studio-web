@@ -58,7 +58,8 @@ import { useMachine } from "../machine/MachineContext";
 import type { MachineDriver } from "../machine/driver";
 
 export default function Settings() {
-  const { t, locale, setLocale, locales, localeLabels } = useI18n();
+  const { t, tPhase, tStatus, locale, setLocale, locales, localeLabels } =
+    useI18n();
   const { config, session, mode, logout, refresh } = useAuth();
   const {
     driver,
@@ -213,13 +214,19 @@ export default function Settings() {
       const msg = await fn(creds);
       setAccMsg(msg);
     } catch (e) {
-      setAccError(
+      const msg =
         e instanceof CloudError
           ? e.message
           : e instanceof Error
             ? e.message
-            : String(e),
-      );
+            : String(e);
+      if (/password|auth|login|401|403/i.test(msg)) {
+        setAccError(t("cloud.sessionExpired"));
+      } else if (/network|fetch|cors|failed to fetch/i.test(msg)) {
+        setAccError(t("cloud.networkError"));
+      } else {
+        setAccError(msg);
+      }
     } finally {
       setAccBusy(null);
     }
@@ -505,7 +512,10 @@ export default function Settings() {
                   : webBluetooth.reason ?? t("settings.unavailable")
               }
             />
-            <Row label={t("settings.bleSession")} value={bleSnapshot.phase} />
+            <Row
+              label={t("settings.bleSession")}
+              value={tPhase(bleSnapshot.phase)}
+            />
             <Row
               label={t("dashboard.device")}
               value={
@@ -518,7 +528,11 @@ export default function Settings() {
             />
             <Row
               label={t("dashboard.phase")}
-              value={bleSnapshot.machineStateName ?? "—"}
+              value={
+                bleSnapshot.machineStateName
+                  ? tStatus(bleSnapshot.machineStateName)
+                  : "—"
+              }
             />
             <Row
               label={t("dashboard.cup")}
@@ -558,8 +572,7 @@ export default function Settings() {
                   variant="primary"
                   disabled={bleBusy}
                   onClick={() => {
-                    // Do not setState before connect: first await must stay
-                    // requestDevice() for Chrome's user-gesture rule.
+                    // Saved pair reconnects without picker; first pair needs chooser.
                     setBleActionError(null);
                     setBleBusy(true);
                     void connectBle()
@@ -574,9 +587,32 @@ export default function Settings() {
                   <Bluetooth className="h-3.5 w-3.5" aria-hidden />
                   {bleSnapshot.phase === "connected"
                     ? t("settings.reconnect")
-                    : t("settings.connect")}
+                    : bleSnapshot.hasPairedDevice
+                      ? t("dashboard.connectRemembered")
+                      : t("settings.connect")}
                 </Button>
               )}
+              {bleSnapshot.hasPairedDevice &&
+              bleSnapshot.phase !== "connecting" ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={bleBusy}
+                  onClick={() => {
+                    setBleActionError(null);
+                    setBleBusy(true);
+                    void connectBle({ forcePicker: true })
+                      .catch((e) =>
+                        setBleActionError(
+                          e instanceof Error ? e.message : String(e),
+                        ),
+                      )
+                      .finally(() => setBleBusy(false));
+                  }}
+                >
+                  {t("dashboard.pickOtherDevice")}
+                </Button>
+              ) : null}
               <Button
                 size="sm"
                 variant="secondary"

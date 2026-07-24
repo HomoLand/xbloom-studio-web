@@ -22,6 +22,8 @@ export const STATE_NAMES: Record<number, string> = {
   0x23: "brewing",
   0x24: "ready",
   0x3b: "brewing",
+  /** Observed mid-tea steep soak / inter-steep wait on Omni Tea Brewer. */
+  0x45: "tea_soaking",
   0x41: "complete",
   0x43: "saving_slots",
   0x25: "slots_saved",
@@ -34,9 +36,21 @@ export const STATE_NAMES: Record<number, string> = {
  */
 export const TERMINAL_STATES = new Set([0x24, 0x41]);
 
+/**
+ * Heartbeat / misclassified status sentinels (low bytes of cup/water streams).
+ * Do not treat as real machine phase — matches core IGNORED_STATES.
+ */
+export const IGNORED_STATES = new Set([0x15, 0x4b]);
+
 /** True end-of-brew beep / complete codes (never idle-at-rest). */
 export function isBrewTerminalState(state: number | null | undefined): boolean {
   return state != null && TERMINAL_STATES.has(state);
+}
+
+export function isIgnoredMachineState(
+  state: number | null | undefined,
+): boolean {
+  return state != null && IGNORED_STATES.has(state);
 }
 
 export const WATER_VOLUME_COMMAND = 40523;
@@ -44,6 +58,59 @@ export const CUP_WEIGHT_COMMAND = 20501;
 export const SCALE_WEIGHT_COMMAND = 10507;
 export const STATUS_COMMAND = 8023;
 export const STATE_MARKER = 0xc1;
+
+/**
+ * Official report / activity names (core telemetry.REPORT_NAMES).
+ * Used so FreeSolo enter/tare/exit/start ACKs are not shown as bare "unknown".
+ */
+export const REPORT_NAMES: Record<number, string> = {
+  8009: "machine_sleeping",
+  8011: "machine_awake",
+  8015: "settings_changed",
+  8023: "machine_activity",
+  8105: "grinder_size",
+  8106: "grinder_speed",
+  8107: "brewer_pattern",
+  8108: "brewer_temperature",
+  8111: "easy_mode_begin",
+  8113: "tea_soak_time_changed",
+  8203: "abnormal_gear_position",
+  8204: "abnormal_dose_or_water",
+  9000: "grinder_state",
+  9001: "brewer_state",
+  9002: "machine_state",
+  9003: "grinder_started",
+  9004: "grinder_exited",
+  9005: "brewer_started",
+  9006: "brewer_exited",
+  9008: "machine_state",
+  9009: "grinder_paused",
+  9010: "brewer_paused",
+  9011: "tea_restarted",
+  9012: "tea_soaking",
+  10507: "scale_weight",
+  20501: "cup_weight",
+  40501: "xpod_detected",
+  40502: "coffee_brewer_started",
+  40505: "gear_position",
+  40507: "grinder_stopped",
+  40510: "pour_stage",
+  40511: "brewer_stopped",
+  40512: "brew_ready",
+  40513: "brew_ready_alt",
+  40515: "tea_paused",
+  40517: "idle_grinding_error",
+  40520: "bypass_started",
+  40522: "no_water_report",
+  40523: "water_volume",
+  40526: "current_grinder",
+  40527: "vibration_before_pour",
+  11506: "pour_radius",
+  11507: "pour_radius_written",
+  11508: "vibration_amplitude",
+  11509: "vibration_amplitude_written",
+  11518: "easy_mode_state",
+};
 
 export type StatusEvent = {
   state: number | null;
@@ -54,6 +121,8 @@ export type StatusEvent = {
   cupWeightG: number | null;
   scaleG: number | null;
   isTerminal: boolean;
+  /** True for heartbeat-like status bytes that should not drive UI phase. */
+  isIgnoredState?: boolean;
 };
 
 export type NotificationFrameStats = {
@@ -155,7 +224,7 @@ export function parseNotification(
     const ml = decodeFloatMeasurement(frame, 0.001, false);
     return {
       state: null,
-      stateName: "scale",
+      stateName: "water_volume",
       raw: frame,
       commandCode,
       dispensedWaterMl: ml,
@@ -168,7 +237,7 @@ export function parseNotification(
     const g = decodeFloatMeasurement(frame, 1.0, true);
     return {
       state: null,
-      stateName: "scale",
+      stateName: "cup_weight",
       raw: frame,
       commandCode,
       dispensedWaterMl: null,
@@ -181,7 +250,7 @@ export function parseNotification(
     const g = decodeFloatMeasurement(frame, 1.0, true);
     return {
       state: null,
-      stateName: "scale",
+      stateName: "scale_weight",
       raw: frame,
       commandCode,
       dispensedWaterMl: null,
@@ -197,7 +266,22 @@ export function parseNotification(
       marker >= 0 ? frame.subarray(marker + 1, frame.length - 2) : new Uint8Array();
     if (payload.length > 0) {
       const state = payload[0]!;
-      const stateName = STATE_NAMES[state] ?? `unknown_0x${state.toString(16).padStart(2, "0")}`;
+      if (IGNORED_STATES.has(state)) {
+        return {
+          state,
+          stateName: "heartbeat",
+          raw: frame,
+          commandCode,
+          dispensedWaterMl: null,
+          cupWeightG: null,
+          scaleG: null,
+          isTerminal: false,
+          isIgnoredState: true,
+        };
+      }
+      const known = STATE_NAMES[state];
+      const stateName =
+        known ?? `status_0x${state.toString(16).padStart(2, "0")}`;
       return {
         state,
         stateName,
@@ -211,10 +295,13 @@ export function parseNotification(
     }
   }
 
-  // Unknown but valid frame shape — ignore for brew UI.
+  // Command echo / FreeSolo activity report — name from official report table.
+  const reportName =
+    REPORT_NAMES[commandCode] ??
+    `ack_0x${(commandCode & 0xff).toString(16).padStart(2, "0")}`;
   return {
     state: null,
-    stateName: "unknown",
+    stateName: reportName,
     raw: frame,
     commandCode,
     dispensedWaterMl: null,
@@ -315,8 +402,15 @@ function indexOfPrefix(hay: Uint8Array, needle: Uint8Array): number {
 }
 
 export function isActedBrewState(state: number | null): boolean {
-  return state === 0x22 || state === 0x10 || state === 0x23 || state === 0x3b ||
-    state === 0x0c || state === 0x0f;
+  return (
+    state === 0x22 ||
+    state === 0x10 ||
+    state === 0x23 ||
+    state === 0x3b ||
+    state === 0x45 || // tea soak / wait between steeps
+    state === 0x0c ||
+    state === 0x0f
+  );
 }
 
 export function isArmedState(state: number | null): boolean {

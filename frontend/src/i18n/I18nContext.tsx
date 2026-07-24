@@ -7,6 +7,11 @@ import {
   type ReactNode,
 } from "react";
 import {
+  labelMachineName,
+  labelMachineOrPhase,
+  labelPhase,
+} from "./machineLabels";
+import {
   LOCALE_LABELS,
   LOCALES,
   messages,
@@ -35,6 +40,15 @@ type I18nValue = {
   locale: Locale;
   setLocale: (locale: Locale) => void;
   t: (key: string, fallback?: string) => string;
+  /** Session phase → 冲煮中 / Brewing … */
+  tPhase: (phase: string | null | undefined) => string;
+  /** Machine state or FreeSolo activity → 浸泡中 / Steeping … */
+  tStatus: (raw: string | null | undefined) => string;
+  /** Prefer machine state, else phase. */
+  tMachineOrPhase: (
+    machineStateName: string | null | undefined,
+    phase: string | null | undefined,
+  ) => string;
   locales: typeof LOCALES;
   localeLabels: typeof LOCALE_LABELS;
 };
@@ -65,15 +79,34 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     [locale],
   );
 
+  const tPhase = useCallback(
+    (phase: string | null | undefined) => labelPhase(t, phase),
+    [t],
+  );
+  const tStatus = useCallback(
+    (raw: string | null | undefined) => labelMachineName(t, raw),
+    [t],
+  );
+  const tMachineOrPhase = useCallback(
+    (
+      machineStateName: string | null | undefined,
+      phase: string | null | undefined,
+    ) => labelMachineOrPhase(t, machineStateName, phase),
+    [t],
+  );
+
   const value = useMemo(
     () => ({
       locale,
       setLocale,
       t,
+      tPhase,
+      tStatus,
+      tMachineOrPhase,
       locales: LOCALES,
       localeLabels: LOCALE_LABELS,
     }),
-    [locale, setLocale, t],
+    [locale, setLocale, t, tPhase, tStatus, tMachineOrPhase],
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

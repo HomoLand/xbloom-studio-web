@@ -22,11 +22,19 @@ export {
   BleGattError,
   connectGatt,
   disconnectGatt,
+  getPermittedDevices,
   isGattConnected,
   requestStudioDevice,
+  resolveRememberedStudioDevice,
   writeCommand,
   type GattHandles,
 } from "./gatt";
+export {
+  clearPairedDevice,
+  readPairedDevice,
+  writePairedDevice,
+  type PairedDeviceInfo,
+} from "./pairedDevice";
 export {
   buildLoadFrames,
   buildStatusQuery,

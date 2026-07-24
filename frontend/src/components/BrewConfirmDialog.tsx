@@ -20,7 +20,7 @@ import {
 import { persistWorkflow } from "../lib/workflowStore";
 import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
-import { Alert, Button, Dialog, Field, TextInput } from "./ui";
+import { Alert, Button, Dialog } from "./ui";
 
 export type BrewTarget = {
   recipeRevisionId: string;
@@ -37,14 +37,14 @@ type Props = {
 };
 
 /**
- * Confirmation dialog for load+start.
+ * Recipe preview + red confirm for load+start.
  * Closing/unmounting never cancels, stops, or disconnects the machine.
+ * Bridge APIs still receive the internal safety token automatically.
  */
 export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, tPhase, tStatus } = useI18n();
   const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
-  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState<"load" | "start" | "cancel" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<string | null>(null);
@@ -59,14 +59,12 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
   const content = target?.content ?? null;
   const kind = content ? storageKindOf(content) : "coffee";
-  const phrase = startConfirmationForKind(kind);
   const name =
     target?.recipeName ||
     (content ? recipeDisplayName(content) : "Recipe");
   const webBle = driver === "web-bluetooth";
 
   const reset = () => {
-    setConfirm("");
     setBusy(null);
     setError(null);
     setRecovery(null);
@@ -88,10 +86,6 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       setError(t("brew.unsupported"));
       return;
     }
-    if (confirm.trim() !== phrase) {
-      setError(`Confirmation phrase must match exactly: ${phrase}`);
-      return;
-    }
 
     setError(null);
     setRecovery(null);
@@ -104,8 +98,10 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       if (
         bleSnapshot.phase === "idle" ||
         bleSnapshot.phase === "disconnected" ||
-        bleSnapshot.phase === "error"
+        bleSnapshot.phase === "error" ||
+        bleSnapshot.phase === "terminal"
       ) {
+        // Auto-reconnect with saved pair (no picker after first grant).
         setBusy("load");
         await connectBle();
       }
@@ -174,6 +170,8 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
     let workflowId = loadedWorkflowId;
     const beverage = kind;
+    // Bridge still requires the fixed token; UI no longer asks the user to type it.
+    const confirmation = startConfirmationForKind(beverage);
 
     if (!workflowId) {
       setBusy("load");
@@ -220,12 +218,6 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       }
     }
 
-    if (confirm.trim() !== phrase) {
-      setError(`Confirmation phrase must match exactly: ${phrase}`);
-      setBusy(null);
-      return;
-    }
-
     setBusy("start");
     // Fresh request_id for this explicit user start mutation.
     const startRequestId = newRequestId("start");
@@ -233,13 +225,13 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       if (beverage === "tea") {
         await api.teaStart({
           workflow_id: workflowId,
-          confirmation: confirm.trim(),
+          confirmation,
           request_id: startRequestId,
         });
       } else {
         await api.coffeeStart({
           workflow_id: workflowId,
-          confirmation: confirm.trim(),
+          confirmation,
           request_id: startRequestId,
         });
       }
@@ -296,13 +288,16 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
 
         {webBle ? (
           <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-            {t("settings.webBle")} · {bleSnapshot.phase}
+            {t("settings.webBle")} · {tPhase(bleSnapshot.phase)}
             {bleSnapshot.machineStateName
-              ? ` · ${bleSnapshot.machineStateName}`
+              ? ` · ${tStatus(bleSnapshot.machineStateName)}`
               : ""}
             {bleSnapshot.cupWeightG != null
               ? ` · ${bleSnapshot.cupWeightG} g`
               : ""}
+            {kind === "tea" ? (
+              <div className="mt-1 text-ink-faint">{t("brew.teaPhysHint")}</div>
+            ) : null}
           </div>
         ) : null}
 
@@ -317,26 +312,35 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
           <RecipeSnapshot content={content} />
         </div>
 
+        <Alert tone="red">
+          <div className="space-y-1.5 text-sm">
+            <div className="font-medium">{t("brew.safetyTitle")}</div>
+            <ul className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed">
+              {(kind === "tea"
+                ? [
+                    t("brew.safetyTea1"),
+                    t("brew.safetyTea2"),
+                    t("brew.safetyTea3"),
+                    t("brew.safetyTea4"),
+                  ]
+                : [
+                    t("brew.safetyCoffee1"),
+                    t("brew.safetyCoffee2"),
+                    t("brew.safetyCoffee3"),
+                    t("brew.safetyCoffee4"),
+                  ]
+              ).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="pt-0.5 text-xs opacity-90">{t("brew.safetyFooter")}</p>
+          </div>
+        </Alert>
+
         {error ? <Alert tone="red">{error}</Alert> : null}
         {recovery ? (
           <Alert tone={uncertain ? "amber" : "blue"}>{recovery}</Alert>
         ) : null}
-
-        <Field
-          label={`${t("brew.phrase")} (${phrase})`}
-          htmlFor="brew-confirm-phrase"
-          hint={t("brew.phraseHint")}
-        >
-          <TextInput
-            id="brew-confirm-phrase"
-            value={confirm}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setConfirm(e.target.value)}
-            placeholder={phrase}
-            disabled={!!busy || blockMutation}
-          />
-        </Field>
 
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="secondary" onClick={handleClose} disabled={!!busy}>
@@ -357,15 +361,16 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
           ) : null}
           {!blockMutation ? (
             <Button
-              variant="success"
+              variant="danger"
+              className="border-transparent bg-accent-red text-paper hover:brightness-110 active:brightness-95"
               onClick={() => void brew()}
-              disabled={!!busy || confirm.trim() !== phrase}
+              disabled={!!busy}
             >
               {busy === "load"
                 ? t("brew.loading")
                 : busy === "start"
                   ? t("brew.starting")
-                  : t("brew.loadStart")}
+                  : t("brew.confirmStart")}
             </Button>
           ) : (
             <Button

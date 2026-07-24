@@ -1,6 +1,9 @@
 /**
  * Web Bluetooth machine session (W0–W3).
- * Page lifetime = session lifetime (tab-close recovery out of scope).
+ *
+ * Device identity is remembered across reloads via localStorage + Chrome
+ * getDevices(). GATT is connected on demand (brew / tools) and released after
+ * brew terminal so the official App is not blocked.
  *
  * Also records local brew journal + telemetry samples, and exposes FreeSolo
  * scale / grinder / hot-water control builders (same frames as core protocol).
@@ -44,20 +47,46 @@ import {
   disconnectGatt,
   isGattConnected,
   requestStudioDevice,
+  resolveRememberedStudioDevice,
   startStatusNotifications,
   writeCommand,
   type GattHandles,
   BleGattError,
 } from "./gatt.ts";
-import { buildLoadFrames, buildStatusQuery } from "./load.ts";
 import {
+  clearPairedDevice,
+  readPairedDevice,
+  writePairedDevice,
+} from "./pairedDevice.ts";
+import {
+  buildLoadFrames,
+  buildSessionStart,
+  buildStatusQuery,
+} from "./load.ts";
+import {
+  CUP_WEIGHT_COMMAND,
   isActedBrewState,
   isArmedState,
   isBrewTerminalState,
+  isIgnoredMachineState,
   NotificationFrameStream,
   parseNotification,
+  REPORT_NAMES,
+  SCALE_WEIGHT_COMMAND,
+  STATE_NAMES,
+  STATUS_COMMAND,
+  WATER_VOLUME_COMMAND,
   type StatusEvent,
 } from "./telemetry.ts";
+
+/** Tea firmware report codes that mean a brew is actually running. */
+const TEA_ACTIVE_REPORTS = new Set([
+  9011, // tea_restarted
+  9012, // tea_soaking
+  40515, // tea_paused
+  40520, // bypass_started (tea siphon finish phase on firmware)
+  40502, // coffee_brewer_started (also used by some tea paths)
+]);
 
 /** Throttle telemetry samples to keep localStorage small. */
 const TELEMETRY_SAMPLE_MIN_MS = 400;
@@ -112,12 +141,31 @@ export type SessionSnapshot = {
   phase: SessionPhase;
   deviceId: string | null;
   deviceName: string | null;
+  /** True when a Studio was paired before (localStorage and/or in-memory). */
+  hasPairedDevice: boolean;
+  /**
+   * True when we hold a live BluetoothDevice object that can reconnect without
+   * the Chrome chooser (same tab, or restored via getDevices after reload).
+   */
+  pairRestored: boolean;
+  /**
+   * After reload: localStorage has a pair but Chrome getDevices() did not
+   * return it — next Connect must open the chooser once to re-grant.
+   */
+  needsChooserToRestore: boolean;
   lastError: string | null;
   notifyCount: number;
   /** Latest decoded machine phase label (e.g. armed, brewing). */
   machineStateName: string | null;
   machineState: number | null;
+  /**
+   * Last FreeSolo / report activity (enter, tare, brewer_started, …).
+   * Separate from machineStateName so ACKs do not flash over idle/brewing.
+   */
+  lastActivityName: string | null;
   cupWeightG: number | null;
+  /** FreeSolo electronic-scale grams (report 10507); may differ from cup scale. */
+  scaleG: number | null;
   dispensedWaterMl: number | null;
   loaded: boolean;
   /** Live telemetry buffer for current brew (copy). */
@@ -126,6 +174,14 @@ export type SessionSnapshot = {
   targetWaterMl: number | null;
   pourCount: number | null;
   recipeName: string | null;
+  /** Last finished brew (survives disconnect) for Dashboard complete banner. */
+  lastCompletedBrew: {
+    recipeName: string | null;
+    recipeRevisionId: string | null;
+    kind: string | null;
+    outcome: string;
+    at: string;
+  } | null;
 };
 
 type Listener = (snap: SessionSnapshot) => void;
@@ -142,11 +198,15 @@ export class WebBleSession {
   private notifyCount = 0;
   private machineStateName: string | null = null;
   private machineState: number | null = null;
+  private lastActivityName: string | null = null;
   private cupWeightG: number | null = null;
+  private scaleG: number | null = null;
   private dispensedWaterMl: number | null = null;
   private loaded = false;
   /** True while connect() is still wiring services/notify — ignore spur ious disconnects. */
   private setupInProgress = false;
+  /** Bumped by abortConnect / new connect so in-flight connect work is abandoned. */
+  private connectGeneration = 0;
   private readonly stream = new NotificationFrameStream();
   private readonly listeners = new Set<Listener>();
   private terminalWatch: ReturnType<typeof setInterval> | null = null;
@@ -158,6 +218,12 @@ export class WebBleSession {
   private telemetrySamples: TelemetrySample[] = [];
   private lastSampleAtMs = 0;
   private historyFlushed = false;
+  /**
+   * True after we observe real brew activity. Idle (0x01) must not terminal
+   * until this is set — otherwise tea start is aborted while machine still idle.
+   */
+  private brewActed = false;
+  private lastCompletedBrew: SessionSnapshot["lastCompletedBrew"] = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -166,15 +232,32 @@ export class WebBleSession {
   }
 
   snapshot(): SessionSnapshot {
+    const stored = readPairedDevice();
+    const deviceId =
+      this.handles?.device.id ?? this.device?.id ?? stored?.id ?? null;
+    const deviceName =
+      this.handles?.device.name ??
+      this.device?.name ??
+      stored?.name ??
+      null;
+    const hasPairedDevice = Boolean(this.device || stored);
+    const pairRestored = Boolean(this.device);
     return {
       phase: this.phase,
-      deviceId: this.handles?.device.id ?? null,
-      deviceName: this.handles?.device.name ?? null,
+      deviceId,
+      deviceName,
+      hasPairedDevice,
+      pairRestored,
+      // Stored id/name exists but no BluetoothDevice yet → reload lost JS object
+      // and getDevices did not restore (or not yet hydrated).
+      needsChooserToRestore: Boolean(stored && !this.device),
       lastError: this.lastError,
       notifyCount: this.notifyCount,
       machineStateName: this.machineStateName,
       machineState: this.machineState,
+      lastActivityName: this.lastActivityName,
       cupWeightG: this.cupWeightG,
+      scaleG: this.scaleG,
       dispensedWaterMl: this.dispensedWaterMl,
       loaded: this.loaded,
       telemetrySamples: this.telemetrySamples.slice(),
@@ -183,7 +266,46 @@ export class WebBleSession {
       targetWaterMl: this.brewMeta?.target_water_ml ?? null,
       pourCount: this.brewMeta?.pour_count ?? null,
       recipeName: this.brewMeta?.recipe_name ?? null,
+      lastCompletedBrew: this.lastCompletedBrew
+        ? { ...this.lastCompletedBrew }
+        : null,
     };
+  }
+
+  /** Dismiss the post-brew complete banner. */
+  clearLastCompletedBrew(): void {
+    this.lastCompletedBrew = null;
+    this.emit();
+  }
+
+  private rememberDevice(device: BluetoothDevice): void {
+    this.device = device;
+    writePairedDevice({ id: device.id, name: device.name ?? null });
+  }
+
+  /**
+   * Restore BluetoothDevice from Chrome permission grant (no picker).
+   * Safe to call on page load without a user gesture.
+   * @returns true when a BluetoothDevice is available for silent reconnect.
+   */
+  async hydratePairedDevice(): Promise<boolean> {
+    if (this.device) {
+      this.emit();
+      return true;
+    }
+    const stored = readPairedDevice();
+    // Prefer stored id/name; resolver also matches name prefix / single grant.
+    const restored = await resolveRememberedStudioDevice(
+      stored?.id ?? null,
+      stored?.name ?? null,
+    );
+    if (!restored) {
+      this.emit();
+      return false;
+    }
+    this.rememberDevice(restored);
+    this.emit();
+    return true;
   }
 
   private emit(): void {
@@ -213,6 +335,7 @@ export class WebBleSession {
     this.telemetrySamples = [];
     this.lastSampleAtMs = 0;
     this.historyFlushed = false;
+    this.brewActed = false;
   }
 
   private maybeSampleTelemetry(): void {
@@ -249,14 +372,22 @@ export class WebBleSession {
     this.historyFlushed = true;
     // Final sample at terminal.
     this.maybeSampleTelemetry();
+    const meta = this.brewMeta;
+    this.lastCompletedBrew = {
+      recipeName: meta?.recipe_name ?? null,
+      recipeRevisionId: meta?.recipe_revision_id ?? null,
+      kind: meta?.kind ?? null,
+      outcome,
+      at: new Date().toISOString(),
+    };
     try {
       appendLocalHistory({
         outcome,
         source: "web-bluetooth",
-        recipe_name: this.brewMeta?.recipe_name,
-        recipe_revision_id: this.brewMeta?.recipe_revision_id,
-        workflow_id: this.brewMeta?.workflow_id,
-        kind: this.brewMeta?.kind ?? "coffee",
+        recipe_name: meta?.recipe_name,
+        recipe_revision_id: meta?.recipe_revision_id,
+        workflow_id: meta?.workflow_id,
+        kind: meta?.kind ?? "coffee",
         note,
         machine: this.device?.name ?? this.handles?.device.name ?? undefined,
         telemetry: this.telemetrySamples.slice(),
@@ -279,25 +410,114 @@ export class WebBleSession {
 
   private applyEvent(ev: StatusEvent): void {
     this.notifyCount += 1;
-    if (ev.state != null) {
+
+    const inBrewPath =
+      this.phase === "loading" ||
+      this.phase === "armed" ||
+      this.phase === "starting" ||
+      this.phase === "brewing" ||
+      this.phase === "paused";
+
+    // Named FreeSolo / report activity (tare ACK, brewer_started, …).
+    // Do not overwrite machineStateName — that flash looked like "unknown".
+    if (
+      ev.state == null &&
+      ev.stateName &&
+      ev.stateName !== "cup_weight" &&
+      ev.stateName !== "scale_weight" &&
+      ev.stateName !== "water_volume"
+    ) {
+      this.lastActivityName = ev.stateName;
+    } else if (
+      ev.commandCode != null &&
+      REPORT_NAMES[ev.commandCode] &&
+      ev.commandCode !== STATUS_COMMAND &&
+      ev.commandCode !== CUP_WEIGHT_COMMAND &&
+      ev.commandCode !== SCALE_WEIGHT_COMMAND &&
+      ev.commandCode !== WATER_VOLUME_COMMAND
+    ) {
+      this.lastActivityName = REPORT_NAMES[ev.commandCode]!;
+    }
+
+    // Tea/coffee activity reports — only during an actual brew path
+    // (FreeSolo hot water also emits 40502 etc.; must not hijack Tools).
+    if (
+      inBrewPath &&
+      ev.commandCode != null &&
+      TEA_ACTIVE_REPORTS.has(ev.commandCode)
+    ) {
+      this.brewActed = true;
+      if (
+        this.phase === "starting" ||
+        this.phase === "armed" ||
+        this.phase === "loading"
+      ) {
+        this.phase = "brewing";
+      }
+      if (ev.commandCode === 40515) {
+        this.phase = "paused";
+      }
+    }
+    if (ev.dispensedWaterMl != null && ev.dispensedWaterMl > 0) {
+      if (
+        this.phase === "starting" ||
+        this.phase === "brewing" ||
+        this.phase === "armed"
+      ) {
+        this.brewActed = true;
+      }
+    }
+    if (ev.state != null && !ev.isIgnoredState && !isIgnoredMachineState(ev.state)) {
       this.machineState = ev.state;
-      this.machineStateName = ev.stateName;
+      // Always prefer STATE_NAMES for known bytes (0x45 → tea_soaking, never status_0x45).
+      const canonical = STATE_NAMES[ev.state] ?? null;
+      if (canonical) {
+        this.machineStateName = canonical;
+      } else if (
+        !ev.stateName.startsWith("status_0x") &&
+        !ev.stateName.startsWith("unknown")
+      ) {
+        this.machineStateName = ev.stateName;
+      } else {
+        // Unknown wire byte: keep last friendly name; stash raw for debug activity only.
+        this.lastActivityName = ev.stateName;
+      }
       if (isArmedState(ev.state)) {
         this.loaded = true;
         if (this.phase === "loading" || this.phase === "connected") {
           this.phase = "armed";
         }
       }
-      if (isActedBrewState(ev.state) && (this.phase === "starting" || this.phase === "armed")) {
-        this.phase = "brewing";
+      if (inBrewPath && isActedBrewState(ev.state)) {
+        this.brewActed = true;
+        if (
+          this.phase === "starting" ||
+          this.phase === "armed" ||
+          this.phase === "loading" ||
+          this.phase === "paused"
+        ) {
+          // 0x45 tea_soaking is still an active brew wait, not paused UI.
+          this.phase = "brewing";
+        }
       }
-      if (shouldEnterTerminalPhase(this.phase, ev.state)) {
+      // Terminal ready/complete always ends brew.
+      if (isBrewTerminalState(ev.state) && shouldEnterTerminalPhase(this.phase, ev.state)) {
+        this.phase = "terminal";
+        this.maybeSampleTelemetry();
+        this.flushBrewHistory(this.outcomeFromMachineState());
+      } else if (
+        // Idle only terminals after we actually saw brew activity (tea-safe).
+        ev.state === 0x01 &&
+        this.brewActed &&
+        shouldEnterTerminalPhase(this.phase, ev.state)
+      ) {
         this.phase = "terminal";
         this.maybeSampleTelemetry();
         this.flushBrewHistory(this.outcomeFromMachineState());
       }
     }
     if (ev.cupWeightG != null) this.cupWeightG = ev.cupWeightG;
+    if (ev.scaleG != null) this.scaleG = ev.scaleG;
     if (ev.dispensedWaterMl != null) this.dispensedWaterMl = ev.dispensedWaterMl;
     this.maybeSampleTelemetry();
     this.emit();
@@ -314,22 +534,73 @@ export class WebBleSession {
   /**
    * Connect or reconnect.
    *
-   * Chrome requires ``requestDevice()`` to run in the same user-gesture turn
-   * (or as the *first* await from the click). Any prior ``await sleep(...)``
-   * drops the gesture → chooser never appears → phase stuck on ``connecting``.
-   * That was the Settings-page hang (Dashboard felt fine after a cached device).
+   * Resolution order (no chooser when possible):
+   * 1. In-memory device from this tab session
+   * 2. Chrome getDevices() + saved id (after first pair / page reload)
+   * 3. requestDevice() picker — needs a user gesture (first pair or forcePicker)
+   *
+   * After brew ends we soft-disconnect GATT but keep the pair so the next
+   * Confirm brew can reconnect automatically.
+   *
+   * Localhost vs GitHub Pages are different origins: each needs its own first
+   * picker grant. Windows GATT connect can hang — connectGatt uses timeouts.
    */
   async connect(opts: { forcePicker?: boolean } = {}): Promise<void> {
     this.stopTerminalWatch();
+    // Invalidate any previous in-flight connect.
+    this.connectGeneration += 1;
+    const gen = this.connectGeneration;
 
-    // 1) Resolve device BEFORE any other await so the click gesture is still valid.
-    let device = this.device;
-    if (!device || opts.forcePicker) {
-      device = await requestStudioDevice();
-      this.device = device;
+    // 1) Resolve device. Prefer remembered grants so brew/tools skip the picker.
+    // Do NOT set phase "connecting" before a chooser — cancelled pickers looked stuck.
+    let device: BluetoothDevice | null = null;
+    try {
+      if (opts.forcePicker) {
+        // User explicitly wants the chooser (change machine).
+        device = await requestStudioDevice();
+        if (gen !== this.connectGeneration) return;
+        this.rememberDevice(device);
+      } else {
+        device = this.device;
+        if (!device) {
+          const stored = readPairedDevice();
+          // Only call getDevices when we already paired once (or any prior
+          // grant may exist). Skipping it on cold first pair keeps
+          // requestDevice as the first await (user gesture).
+          if (stored) {
+            device = await resolveRememberedStudioDevice(
+              stored.id,
+              stored.name,
+            );
+            if (gen !== this.connectGeneration) return;
+            if (device) this.rememberDevice(device);
+          }
+        }
+        if (!device) {
+          // First pair, or Chrome did not persist BLE grant across reload.
+          // Chooser is required once; same-tab reconnect stays silent after.
+          device = await requestStudioDevice();
+          if (gen !== this.connectGeneration) return;
+          this.rememberDevice(device);
+        }
+      }
+    } catch (err) {
+      this.setupInProgress = false;
+      const message =
+        err instanceof BleGattError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      if (/NotFoundError|not_found|No device selected|cancelled|abort/i.test(message)) {
+        this.setPhase("idle");
+        return;
+      }
+      this.setPhase("error", message);
+      throw err;
     }
 
-    // 2) Now safe to do async teardown / GATT work.
+    // 2) GATT work (no picker from here).
     this.setupInProgress = true;
     this.setPhase("connecting");
     if (this.stopNotify) {
@@ -340,32 +611,60 @@ export class WebBleSession {
     this.handles = null;
 
     try {
-      // Brief settle only after device is already chosen.
       await sleep(80);
+      if (gen !== this.connectGeneration) return;
       this.bindDisconnectListener(device);
       this.handles = await connectGatt(device);
+      if (gen !== this.connectGeneration) {
+        this.cleanupHandles(true);
+        return;
+      }
       this.notifyCount = 0;
       this.stream.reset();
       this.machineState = null;
       this.machineStateName = null;
+      this.lastActivityName = null;
       this.cupWeightG = null;
+      this.scaleG = null;
       this.dispensedWaterMl = null;
       this.loaded = false;
       this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
         this.onNotifyChunk(dv),
       );
+      if (gen !== this.connectGeneration) {
+        this.cleanupHandles(true);
+        return;
+      }
       await sleep(100);
       if (!isGattConnected(this.handles)) {
         this.handles = await connectGatt(device);
+        if (gen !== this.connectGeneration) {
+          this.cleanupHandles(true);
+          return;
+        }
         this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
           this.onNotifyChunk(dv),
         );
         await sleep(100);
       }
+      if (gen !== this.connectGeneration) {
+        this.cleanupHandles(true);
+        return;
+      }
       await writeCommand(this.handles, buildStatusQuery());
+      if (gen !== this.connectGeneration) {
+        this.cleanupHandles(true);
+        return;
+      }
+      // Confirm pair after a live link (name may appear only after connect).
+      this.rememberDevice(device);
       this.setupInProgress = false;
       this.setPhase("connected");
     } catch (err) {
+      if (gen !== this.connectGeneration) {
+        // Aborted — leave phase as idle (abortConnect already set it).
+        return;
+      }
       this.setupInProgress = false;
       this.cleanupHandles(true);
       const message =
@@ -374,12 +673,10 @@ export class WebBleSession {
           : err instanceof Error
             ? err.message
             : String(err);
-      // Dead permission / gone device → clear cache so next click opens picker first.
-      if (
-        /not found|no longer|permission|failed|disconnected|timeout/i.test(
-          message,
-        )
-      ) {
+      // Transient GATT failure: keep localStorage pair so next brew retries
+      // without a picker. Only drop the in-memory object on hard hangs so
+      // abort/retry can re-resolve via getDevices.
+      if (/timeout|connect_failed/i.test(message)) {
         this.unbindDisconnectListener();
         this.device = null;
       }
@@ -388,20 +685,32 @@ export class WebBleSession {
     }
   }
 
-  /** Cancel a stuck ``connecting`` phase (e.g. chooser dismissed / hang). */
+  /** Cancel a stuck ``connecting`` phase (chooser hang / GATT hang). */
   abortConnect(): void {
+    this.connectGeneration += 1;
     this.setupInProgress = false;
+    // Drop half-open GATT so the next connect is clean.
+    if (this.device) {
+      try {
+        this.device.gatt?.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
     this.cleanupHandles(true);
+    // Clear in-memory only — localStorage pair stays so hydrate/getDevices works.
+    this.unbindDisconnectListener();
+    this.device = null;
     this.setPhase("idle");
   }
 
-  /** Soft disconnect: drop GATT, keep paired device for one-tap reconnect. */
+  /** Soft disconnect: drop GATT, keep paired device for auto-reconnect on brew. */
   async disconnect(): Promise<void> {
     this.stopTerminalWatch();
     this.setupInProgress = false;
     this.cleanupHandles(true);
     this.loaded = false;
-    // Intentionally keep this.device + disconnect listener owner for reconnect.
+    // Intentionally keep this.device + localStorage for the next brew connect.
     this.setPhase("idle");
   }
 
@@ -410,6 +719,8 @@ export class WebBleSession {
     await this.disconnect();
     this.unbindDisconnectListener();
     this.device = null;
+    clearPairedDevice();
+    this.emit();
   }
 
   /**
@@ -419,8 +730,19 @@ export class WebBleSession {
   private async ensureLinked(): Promise<void> {
     if (isGattConnected(this.handles)) return;
     if (!this.device) {
+      const stored = readPairedDevice();
+      const restored =
+        (await resolveRememberedStudioDevice(
+          stored?.id ?? null,
+          stored?.name ?? null,
+        )) ?? (await resolveRememberedStudioDevice(null, null));
+      if (restored) {
+        this.rememberDevice(restored);
+      }
+    }
+    if (!this.device) {
       throw new BleGattError(
-        "Not connected. Tap Connect Studio first (user gesture required).",
+        "Not connected. Pair Studio once (Connect), then brew will auto-reconnect.",
         "not_connected",
       );
     }
@@ -430,6 +752,7 @@ export class WebBleSession {
         this.stopNotify();
         this.stopNotify = null;
       }
+      this.bindDisconnectListener(this.device);
       this.handles = await connectGatt(this.device);
       this.stopNotify = await startStatusNotifications(this.handles, (dv) =>
         this.onNotifyChunk(dv),
@@ -438,7 +761,8 @@ export class WebBleSession {
       if (
         this.phase === "idle" ||
         this.phase === "disconnected" ||
-        this.phase === "error"
+        this.phase === "error" ||
+        this.phase === "terminal"
       ) {
         this.setPhase("connected");
       }
@@ -533,17 +857,20 @@ export class WebBleSession {
 
   /**
    * Upload tea recipe (set cup + code). Does not execute.
-   * Separately call startTea after UI safety phrase.
+   *
+   * Matches Python ``load_tea_recipe``: session a4 + status settle, then
+   * 8104 set-cup and 4513 recipe-code. Separately call startTea after confirm.
    */
   async loadTea(
     content: TeaRecipeContent,
-    opts: { journal?: BrewJournalMeta } = {},
+    opts: { journal?: BrewJournalMeta; settleMs?: number } = {},
   ): Promise<void> {
     if (
       !this.handles ||
       this.phase === "idle" ||
       this.phase === "disconnected" ||
-      this.phase === "error"
+      this.phase === "error" ||
+      this.phase === "connecting"
     ) {
       throw new BleGattError(
         "Connect to the machine before loading tea.",
@@ -571,14 +898,22 @@ export class WebBleSession {
       });
     }
     this.loaded = false;
+    this.brewActed = false;
     this.setPhase("loading");
-    // Coffee path: status settle is done on connect; tea still needs load frames.
+
+    // Fresh CLI/app session handshake (required — without it tea frames are ignored).
+    await this.requireWrite(buildSessionStart());
+    await sleep(500);
+    await this.requireWrite(buildStatusQuery());
+    await sleep(opts.settleMs ?? 2000);
+
     const frames = buildTeaLoadFrames(teaContentToProtocol(content));
     for (const frame of frames) {
       await this.requireWrite(frame);
-      await sleep(300);
+      // Pace like the Python client (machine needs spacing + notify ACKs).
+      await sleep(400);
     }
-    // Tea load stops at pre-start (not coffee armed 0x1f); treat as armed for UI.
+    // Tea pre-start is not coffee armed 0x1f; mark loaded for startTea.
     this.loaded = true;
     this.setPhase("armed");
   }
@@ -591,8 +926,11 @@ export class WebBleSession {
     if (!this.loaded && this.phase !== "armed") {
       throw new BleGattError("Load a tea recipe before starting.", "not_armed");
     }
+    this.brewActed = false;
     this.setPhase("starting");
     await this.requireWrite(buildTeaStart());
+    // Do not force brewing+release immediately: wait for tea_soaking / water.
+    // Forcing brewing while still idle used to auto-terminal and disconnect.
     this.setPhase("brewing");
     this.watchTerminalAndRelease();
   }
@@ -608,7 +946,7 @@ export class WebBleSession {
 
   /**
    * Start armed brew: commit, observe, optional 40518 if still awaiting_confirm.
-   * Requires caller already verified ready phrase at UI layer.
+   * UI gates start with an explicit red confirm (no typed phrase).
    */
   async startBrew(opts: { settleMs?: number } = {}): Promise<void> {
     if (!this.handles) {
@@ -695,8 +1033,8 @@ export class WebBleSession {
   }
 
   /**
-   * Pause a running automatic coffee brew (40518 while running).
-   * State-sensitive: only valid during active brew.
+   * Pause a running brew (state-sensitive 40518).
+   * Works for coffee; tea firmware may also accept it during pour/soak.
    */
   async pauseBrew(): Promise<void> {
     if (this.phase !== "brewing" && this.phase !== "starting") {
@@ -711,7 +1049,7 @@ export class WebBleSession {
     this.emit();
   }
 
-  /** Resume a paused automatic coffee brew (40524). */
+  /** Resume a paused brew (40524; tea may also emit 40515 paused). */
   async resumeBrew(): Promise<void> {
     if (this.phase !== "paused") {
       throw new BleGattError(

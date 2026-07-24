@@ -16,17 +16,19 @@ import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
 
 export default function Tools() {
-  const { t } = useI18n();
+  const { t, tPhase, tStatus } = useI18n();
   const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
   const webBle = driver === "web-bluetooth";
   const linked =
     bleSnapshot.phase !== "idle" &&
     bleSnapshot.phase !== "disconnected" &&
     bleSnapshot.phase !== "error" &&
-    bleSnapshot.phase !== "connecting";
+    bleSnapshot.phase !== "connecting" &&
+    bleSnapshot.phase !== "terminal";
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [flashOk, setFlashOk] = useState<string | null>(null);
 
   // Grinder
   const [grind, setGrind] = useState(50);
@@ -38,8 +40,14 @@ export default function Tools() {
   const [flowMlS, setFlowMlS] = useState(3.5);
   const [pattern, setPattern] = useState("center");
 
+  const weightG =
+    bleSnapshot.scaleG != null
+      ? bleSnapshot.scaleG
+      : bleSnapshot.cupWeightG;
+
   const run = async (label: string, fn: () => Promise<void>) => {
     setError(null);
+    setFlashOk(null);
     setBusy(label);
     try {
       if (!webBle) {
@@ -49,12 +57,20 @@ export default function Tools() {
         await connectBle();
       }
       await fn();
+      setFlashOk(label);
+      // Brief "ok" without a full-page loading banner that flickers.
+      window.setTimeout(() => {
+        setFlashOk((cur) => (cur === label ? null : cur));
+      }, 900);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
   };
+
+  const btnLabel = (id: string, idle: string) =>
+    busy === id ? "…" : flashOk === id ? "✓" : idle;
 
   return (
     <div>
@@ -72,15 +88,42 @@ export default function Tools() {
         </Alert>
       ) : null}
 
-      <div className="mb-3 text-xs text-ink-muted">
-        {t("dashboard.phase")}:{" "}
-        <span className="text-ink">{bleSnapshot.phase}</span>
-        {bleSnapshot.machineStateName
-          ? ` · ${bleSnapshot.machineStateName}`
-          : ""}
-        {bleSnapshot.cupWeightG != null
-          ? ` · ${t("dashboard.cup")} ${bleSnapshot.cupWeightG}g`
-          : ""}
+      <div className="mb-4 overflow-hidden rounded-2xl border border-line bg-surface-2 px-4 py-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-ink-faint">
+              {t("tools.liveWeight")}
+            </div>
+            <div className="mt-1 font-semibold tabular-nums text-ink">
+              <span className="text-3xl sm:text-4xl">
+                {weightG != null ? weightG.toFixed(1) : "—"}
+              </span>
+              <span className="ml-1 text-sm text-ink-muted">g</span>
+            </div>
+          </div>
+          <div className="text-right text-xs text-ink-muted">
+            <div>
+              {t("dashboard.phase")}:{" "}
+              <span className="text-ink">{tPhase(bleSnapshot.phase)}</span>
+              {bleSnapshot.machineStateName
+                ? ` · ${tStatus(bleSnapshot.machineStateName)}`
+                : ""}
+            </div>
+            {bleSnapshot.dispensedWaterMl != null ? (
+              <div className="mt-0.5">
+                {t("dashboard.water")}:{" "}
+                <span className="tabular-nums text-ink">
+                  {Math.round(bleSnapshot.dispensedWaterMl)} ml
+                </span>
+              </div>
+            ) : null}
+            {bleSnapshot.lastActivityName ? (
+              <div className="mt-0.5 text-ink-faint">
+                {t("tools.lastAction")}: {tStatus(bleSnapshot.lastActivityName)}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -93,7 +136,7 @@ export default function Tools() {
               disabled={busy != null}
               onClick={() => void run("scale-enter", () => bleSession.scaleEnter())}
             >
-              {t("tools.enter")}
+              {btnLabel("scale-enter", t("tools.enter"))}
             </Button>
             <Button
               size="sm"
@@ -101,7 +144,7 @@ export default function Tools() {
               disabled={busy != null}
               onClick={() => void run("scale-tare", () => bleSession.scaleTare())}
             >
-              {t("tools.tare")}
+              {btnLabel("scale-tare", t("tools.tare"))}
             </Button>
             <Button
               size="sm"
@@ -109,7 +152,7 @@ export default function Tools() {
               disabled={busy != null}
               onClick={() => void run("scale-exit", () => bleSession.scaleExit())}
             >
-              {t("tools.exit")}
+              {btnLabel("scale-exit", t("tools.exit"))}
             </Button>
           </div>
         </Panel>
@@ -143,7 +186,7 @@ export default function Tools() {
                 )
               }
             >
-              {t("tools.enter")}
+              {btnLabel("grind-enter", t("tools.enter"))}
             </Button>
             <Button
               size="sm"
@@ -155,7 +198,7 @@ export default function Tools() {
                 )
               }
             >
-              {t("tools.start")}
+              {btnLabel("grind-start", t("tools.start"))}
             </Button>
             <Button
               size="sm"
@@ -165,7 +208,7 @@ export default function Tools() {
                 void run("grind-stop", () => bleSession.grinderStop())
               }
             >
-              {t("tools.stop")}
+              {btnLabel("grind-stop", t("tools.stop"))}
             </Button>
             <Button
               size="sm"
@@ -175,7 +218,7 @@ export default function Tools() {
                 void run("grind-quit", () => bleSession.grinderQuit())
               }
             >
-              {t("tools.quit")}
+              {btnLabel("grind-quit", t("tools.quit"))}
             </Button>
           </div>
         </Panel>
@@ -223,7 +266,7 @@ export default function Tools() {
                 )
               }
             >
-              {t("tools.enter")}
+              {btnLabel("water-enter", t("tools.enter"))}
             </Button>
             <Button
               size="sm"
@@ -235,7 +278,7 @@ export default function Tools() {
                 )
               }
             >
-              {t("tools.start")}
+              {btnLabel("water-start", t("tools.start"))}
             </Button>
             <Button
               size="sm"
@@ -245,7 +288,7 @@ export default function Tools() {
                 void run("water-stop", () => bleSession.waterStop())
               }
             >
-              {t("tools.stop")}
+              {btnLabel("water-stop", t("tools.stop"))}
             </Button>
             <Button
               size="sm"
@@ -255,17 +298,11 @@ export default function Tools() {
                 void run("water-quit", () => bleSession.waterQuit())
               }
             >
-              {t("tools.quit")}
+              {btnLabel("water-quit", t("tools.quit"))}
             </Button>
           </div>
         </Panel>
       </div>
-
-      {busy ? (
-        <p className="mt-3 text-xs text-ink-muted">
-          {t("common.loading")} ({busy})
-        </p>
-      ) : null}
     </div>
   );
 }
