@@ -78,7 +78,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     "dashboard.refresh": "刷新状态",
 
     "recipes.title": "配方",
-    "recipes.desc": "内置起始模板、本地保存与账号同步配方（非测试占位）。",
+    "recipes.desc": "同步 xBloom 账号后：App 官方配方标「官方」，账号自建标「我的」；本机设计另标「设计」。",
     "recipes.official": "官方",
     "recipes.user": "我的",
     "recipes.design": "设计",
@@ -542,7 +542,7 @@ export const messages: Record<Locale, Record<string, string>> = {
     "dashboard.refresh": "Refresh status",
 
     "recipes.title": "Recipes",
-    "recipes.desc": "Built-in starter templates, local saves, and account-synced recipes.",
+    "recipes.desc": "After account sync: App host recipes are Official; your created recipes are Mine; local designs stay Design.",
     "recipes.official": "Official",
     "recipes.user": "Mine",
     "recipes.design": "Design",

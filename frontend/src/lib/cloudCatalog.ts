@@ -18,9 +18,9 @@ import {
   type CloudSyncTargetResult,
 } from "./xbloomCloud.ts";
 import {
+  classifyCloudRecipeSource,
   saveUserRecipe,
   type LocalRecipeEntry,
-  type LocalRecipeSource,
 } from "./localRecipes.ts";
 
 const APP_PATTERN_LABELS: Record<number, PourPattern> = {
@@ -262,9 +262,11 @@ export function importCloudSyncTargets(
           norm.table_id != null
             ? `cloud:${region}:${norm.table_id}`
             : `cloud:${region}:${hashName(norm.name)}`;
+        // coffee/tea host APIs → 官方; created/shared → 我的 (core catalog origin).
+        const source = classifyCloudRecipeSource(t.target, raw);
         const entry = saveUserRecipe(norm.content, {
           recipeId,
-          source: "cloud" as LocalRecipeSource,
+          source,
           tableId: norm.table_id ?? undefined,
           region,
           origin: t.target,

@@ -1,5 +1,5 @@
 /**
- * Local recipe catalog (shipped store + seed data).
+ * Local recipe catalog (browser store only — no fake official seeds).
  * Run: node --experimental-strip-types --test src/lib/localRecipes.test.ts
  */
 
@@ -23,87 +23,146 @@ const store = new Map<string, string>();
 };
 
 const {
+  classifyCloudRecipeSource,
   listAllLocalRecipes,
   pruneOfficialClonesFromUserStore,
-  recipeContentEquivalent,
-  toRecipeRecord,
+  saveUserRecipe,
   validateLocalContent,
 } = await import("./localRecipes.ts");
+
+const teaContent = {
+  name: "Test tea",
+  kind: "tea" as const,
+  leaf_g: 4,
+  output_ml_per_steep: 120,
+  pours: [
+    {
+      label: "1",
+      ml: 90,
+      temp_c: 90,
+      pattern: "center" as const,
+      pause_s: 30,
+      flow_ml_s: 3,
+    },
+  ],
+};
 
 describe("listAllLocalRecipes", () => {
   beforeEach(() => {
     store.clear();
   });
 
-  it("includes bundled official recipes without localStorage", () => {
+  it("starts empty without bundled Skill seeds", () => {
     const list = listAllLocalRecipes();
-    assert.ok(list.length >= 4);
-    assert.ok(
-      list.some(
-        (r) =>
-          r.recipe_id.startsWith("official:") ||
-          r.recipe_id.startsWith("starter:"),
-      ),
-    );
-    assert.ok(list.every((r) => r.content && r.name));
+    assert.equal(list.length, 0);
   });
 
-  it("maps to RecipeRecord shape", () => {
-    const rec = toRecipeRecord(listAllLocalRecipes()[0]!);
-    assert.ok(rec.recipe_id);
-    assert.ok(rec.latest_revision?.content);
-  });
-
-  it("dedupes imported user clone against a bundled official tea", () => {
-    const official = listAllLocalRecipes().find(
-      (r) => r.source === "official" && r.kind === "tea",
-    );
-    assert.ok(official, "bundled official tea missing");
+  it("drops legacy official:* and starter:* rows from storage", () => {
     store.set(
       "xbloom.userRecipes.v1",
       JSON.stringify([
         {
-          recipe_id: "user:clone-tea",
-          name: official!.name,
+          recipe_id: "official:hot-balanced",
+          name: "假官方",
+          kind: "hot",
+          source: "official",
+          content: teaContent,
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+        {
+          recipe_id: "cloud:china:1",
+          name: "App 绿茶",
           kind: "tea",
-          source: "user",
-          content: JSON.parse(JSON.stringify(official!.content)),
+          source: "cloud",
+          origin: "tea",
+          content: teaContent,
           created_at: "2020-01-01T00:00:00.000Z",
           updated_at: "2020-01-01T00:00:00.000Z",
         },
       ]),
     );
-    pruneOfficialClonesFromUserStore();
-    const list = listAllLocalRecipes().filter(
-      (r) => r.name === official!.name,
-    );
-    assert.equal(
-      list.length,
-      1,
-      `expected 1 entry, got ${list.map((r) => r.source + ":" + r.recipe_id).join(",")}`,
-    );
+    const list = listAllLocalRecipes();
+    assert.equal(list.length, 1);
+    assert.equal(list[0]!.recipe_id, "cloud:china:1");
     assert.equal(list[0]!.source, "official");
   });
 
-  it("recipeContentEquivalent ignores note", () => {
-    const a = {
-      name: "X",
-      kind: "tea" as const,
-      leaf_g: 4,
-      output_ml_per_steep: 120,
-      pours: [{ label: "1", ml: 90, temp_c: 90, pattern: "center", pause_s: 30, flow_ml_s: 3 }],
-      note: "a",
-    };
-    const b = { ...a, note: "b" };
-    assert.equal(recipeContentEquivalent(a, b), true);
+  it("maps cloud created origin to user", () => {
+    store.set(
+      "xbloom.userRecipes.v1",
+      JSON.stringify([
+        {
+          recipe_id: "cloud:china:9",
+          name: "我的茶",
+          kind: "tea",
+          source: "cloud",
+          origin: "created",
+          content: { ...teaContent, name: "我的茶" },
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+      ]),
+    );
+    const list = listAllLocalRecipes();
+    assert.equal(list[0]!.source, "user");
+  });
+});
+
+describe("classifyCloudRecipeSource", () => {
+  it("classifies sync targets", () => {
+    assert.equal(classifyCloudRecipeSource("coffee"), "official");
+    assert.equal(classifyCloudRecipeSource("tea"), "official");
+    assert.equal(classifyCloudRecipeSource("created"), "user");
+    assert.equal(classifyCloudRecipeSource("shared"), "user");
+  });
+
+  it("respects appPlaceList user bit", () => {
+    assert.equal(
+      classifyCloudRecipeSource("coffee", { appPlaceList: [4] }),
+      "user",
+    );
+    assert.equal(
+      classifyCloudRecipeSource("created", { appPlaceList: [6] }),
+      "official",
+    );
+  });
+});
+
+describe("saveUserRecipe", () => {
+  beforeEach(() => store.clear());
+
+  it("stores user recipes", () => {
+    const e = saveUserRecipe(teaContent, { source: "user" });
+    assert.equal(e.source, "user");
+    assert.equal(listAllLocalRecipes().length, 1);
   });
 });
 
 describe("validateLocalContent", () => {
-  it("accepts official coffee content", () => {
-    const coffee = listAllLocalRecipes().find((r) => r.kind === "hot");
-    assert.ok(coffee);
-    const v = validateLocalContent(coffee!.content);
+  it("accepts tea content", () => {
+    const v = validateLocalContent(teaContent);
     assert.equal(v.valid, true);
+  });
+});
+
+describe("pruneOfficialClonesFromUserStore", () => {
+  beforeEach(() => store.clear());
+  it("removes leftover seed ids", () => {
+    store.set(
+      "xbloom.userRecipes.v1",
+      JSON.stringify([
+        {
+          recipe_id: "starter:tea-baihao-yinzhen",
+          name: "x",
+          kind: "tea",
+          source: "official",
+          content: teaContent,
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+      ]),
+    );
+    assert.equal(pruneOfficialClonesFromUserStore(), 1);
   });
 });

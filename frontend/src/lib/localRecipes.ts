@@ -1,14 +1,22 @@
 /**
  * Browser-local recipe catalog for static GitHub Pages / offline use.
- * Official seeds ship in the bundle; user recipes persist in localStorage.
+ *
+ * - No fake "official" seeds: xBloom App/cloud recipes become 官方 after sync.
+ * - User-created cloud recipes and local saves are 我的.
+ * - Design candidates stay 设计.
  */
 
-import type { CoffeeRecipeContent, RecipeContent, RecipeRecord, RecipeRevision } from "../api.ts";
-import official, { type OfficialSeed } from "../data/officialRecipes.ts";
+import type {
+  CoffeeRecipeContent,
+  RecipeContent,
+  RecipeRecord,
+  RecipeRevision,
+} from "../api.ts";
 import { defaultCoffeeRecipe, isCoffeeContent, recipeDisplayName } from "./recipeDomain.ts";
 
 const USER_KEY = "xbloom.userRecipes.v1";
 
+/** UI / storage provenance. ``cloud`` is legacy; migrated to official|user on read. */
 export type LocalRecipeSource = "official" | "user" | "design" | "cloud";
 
 export type LocalRecipeEntry = {
@@ -19,9 +27,10 @@ export type LocalRecipeEntry = {
   content: RecipeContent;
   updated_at: string;
   created_at: string;
-  /** Remote xBloom account tableId when source=cloud or after push. */
+  /** Remote xBloom account tableId when synced from cloud. */
   table_id?: number | null;
   region?: string;
+  /** Sync target that produced this row: coffee | tea | created | … */
   origin?: string;
 };
 
@@ -53,147 +62,99 @@ function writeUserRaw(entries: LocalRecipeEntry[]): void {
   localStorage.setItem(USER_KEY, JSON.stringify(entries));
 }
 
-function officialEntries(): LocalRecipeEntry[] {
-  const seeds = official as OfficialSeed[];
-  const t = nowIso();
-  return seeds.map((s) => ({
-    recipe_id: s.recipe_id,
-    name: s.name,
-    kind: s.kind,
-    source: "official" as const,
-    content: s.content,
-    created_at: t,
-    updated_at: t,
-  }));
-}
-
-function normalizeRecipeName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-/** Stable-ish content compare so imported JSON clones match bundled starters. */
-export function recipeContentEquivalent(
-  a: RecipeContent,
-  b: RecipeContent,
-): boolean {
-  try {
-    return (
-      JSON.stringify(normalizeContentForCompare(a)) ===
-      JSON.stringify(normalizeContentForCompare(b))
-    );
-  } catch {
-    return false;
-  }
-}
-
-function normalizeContentForCompare(content: RecipeContent): unknown {
-  // Drop volatile fields; compare the brew-relevant shape.
-  const c = JSON.parse(JSON.stringify(content)) as Record<string, unknown>;
-  delete c.note;
-  if (typeof c.name === "string") {
-    c.name = normalizeRecipeName(c.name);
-  }
-  if (Array.isArray(c.pours)) {
-    c.pours = (c.pours as Array<Record<string, unknown>>).map((p) => {
-      const q = { ...p };
-      if (typeof q.label === "string") q.label = q.label.trim();
-      return q;
-    });
-  }
-  return c;
-}
-
 /**
- * Drop localStorage user clones that only duplicate a bundled official starter
- * (same display name + same content). Common after importing
- * public/recipes/tea-baihao-yinzhen.json while the starter is also shipped.
+ * Map a cloud sync target (+ optional appPlaceList) to UI source.
+ * Aligns with packages/core/xbloom_catalog._origin endpoints.
  */
-export function pruneOfficialClonesFromUserStore(): number {
-  const offs = officialEntries();
-  const users = readUserRaw();
-  const next = users.filter((u) => {
-    // Never prune cloud rows with a table id — those are account catalog.
-    if (u.source === "cloud" || u.table_id != null) return true;
-    const twin = offs.find(
-      (o) =>
-        normalizeRecipeName(o.name) === normalizeRecipeName(u.name) &&
-        recipeContentEquivalent(o.content, u.content),
-    );
-    return !twin;
-  });
-  const removed = users.length - next.length;
-  if (removed > 0) writeUserRaw(next);
-  return removed;
+export function classifyCloudRecipeSource(
+  target: string,
+  raw?: Record<string, unknown> | null,
+): "official" | "user" {
+  const places = parseAppPlaces(raw);
+  // App place bits from Android catalog (see core xbloom_catalog._origin).
+  if (places.includes(4) || places.includes(5)) return "user";
+  if (places.includes(6) || places.includes(2)) return "official";
+
+  const t = (target || "").toLowerCase();
+  if (t === "created" || t === "shared") return "user";
+  // Host coffee/tea, product, easy defaults → treat as xBloom-provided.
+  if (
+    t === "coffee" ||
+    t === "tea" ||
+    t === "product" ||
+    t === "easy" ||
+    t === "easy-default"
+  ) {
+    return "official";
+  }
+  return "user";
 }
 
-let prunedThisSession = false;
-
-export function listAllLocalRecipes(): LocalRecipeEntry[] {
-  // One soft cleanup per tab session so “我的 + 官方” clones disappear.
-  if (!prunedThisSession && typeof localStorage !== "undefined") {
-    prunedThisSession = true;
+function parseAppPlaces(raw?: Record<string, unknown> | null): number[] {
+  if (!raw) return [];
+  const v =
+    raw.appPlaceList ??
+    raw.app_place_list ??
+    raw.appPlaces ??
+    raw.placeList;
+  if (Array.isArray(v)) {
+    return v.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+  }
+  if (typeof v === "string") {
     try {
-      pruneOfficialClonesFromUserStore();
+      const parsed = JSON.parse(v) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+      }
     } catch {
       /* ignore */
     }
   }
+  return [];
+}
 
-  const offs = officialEntries();
-  const users = readUserRaw();
-  const officialIds = new Set(offs.map((o) => o.recipe_id));
-  const userById = new Map(users.map((u) => [u.recipe_id, u]));
-
-  // User clone of an official (same name + same content) → hide user, keep official.
-  // User edit of same name (different content) → show user, hide that official.
-  const suppressOfficialIds = new Set<string>();
-  const suppressUserIds = new Set<string>();
-
-  for (const u of users) {
-    if (u.source === "cloud" || u.table_id != null) continue;
-    const twin = offs.find(
-      (o) => normalizeRecipeName(o.name) === normalizeRecipeName(u.name),
-    );
-    if (!twin) continue;
-    if (recipeContentEquivalent(u.content, twin.content)) {
-      suppressUserIds.add(u.recipe_id);
-    } else {
-      // Customized fork with the same title — prefer the user's version.
-      suppressOfficialIds.add(twin.recipe_id);
-    }
+/**
+ * Normalize legacy rows:
+ * - old bundled seeds (official:*, starter:*) removed
+ * - source "cloud" remapped via origin / app places to official|user
+ */
+function migrateEntry(entry: LocalRecipeEntry): LocalRecipeEntry | null {
+  // Drop historical Skill seeds that were never real App catalog items.
+  if (
+    entry.recipe_id.startsWith("official:") ||
+    entry.recipe_id.startsWith("starter:")
+  ) {
+    return null;
   }
 
-  const merged: LocalRecipeEntry[] = [];
-  for (const o of offs) {
-    if (suppressOfficialIds.has(o.recipe_id)) {
-      const override =
-        users.find(
-          (u) =>
-            !suppressUserIds.has(u.recipe_id) &&
-            normalizeRecipeName(u.name) === normalizeRecipeName(o.name),
-        ) ?? null;
-      if (override) {
-        merged.push(override);
-        suppressUserIds.add(override.recipe_id);
-      }
-      continue;
-    }
-    const byId = userById.get(o.recipe_id);
-    if (byId) {
-      merged.push(byId);
-      suppressUserIds.add(byId.recipe_id);
-    } else {
-      merged.push(o);
-    }
+  if (entry.source === "cloud") {
+    const next = classifyCloudRecipeSource(entry.origin || "", null);
+    return { ...entry, source: next };
   }
+  return entry;
+}
 
-  for (const u of users) {
-    if (suppressUserIds.has(u.recipe_id)) continue;
-    if (officialIds.has(u.recipe_id) && u.source === "official") continue;
-    merged.push(u);
+function ensureMigratedStore(): LocalRecipeEntry[] {
+  const raw = readUserRaw();
+  const next = raw
+    .map(migrateEntry)
+    .filter((e): e is LocalRecipeEntry => e != null);
+  const needsWrite = raw.some(
+    (u) =>
+      u.recipe_id.startsWith("official:") ||
+      u.recipe_id.startsWith("starter:") ||
+      u.source === "cloud",
+  );
+  if (needsWrite) {
+    writeUserRaw(next);
   }
+  return next;
+}
 
-  return merged.sort((a, b) => {
+export function listAllLocalRecipes(): LocalRecipeEntry[] {
+  const entries = ensureMigratedStore();
+  // Official (App) first, then user/design by recency.
+  return [...entries].sort((a, b) => {
     if (a.source === "official" && b.source !== "official") return -1;
     if (b.source === "official" && a.source !== "official") return 1;
     return (b.updated_at || "").localeCompare(a.updated_at || "");
@@ -291,15 +252,25 @@ export function saveUserRecipe(
       ? String((content as { kind: string }).kind)
       : "hot";
   const t = nowIso();
-  const users = readUserRaw();
+  const users = readUserRaw().filter(
+    (u) =>
+      !u.recipe_id.startsWith("official:") &&
+      !u.recipe_id.startsWith("starter:"),
+  );
   const recipeId = opts?.recipeId ?? newUserId();
   const existingIdx = users.findIndex((u) => u.recipe_id === recipeId);
   const prev = existingIdx >= 0 ? users[existingIdx]! : null;
+  let source: LocalRecipeSource =
+    opts?.source ?? prev?.source ?? "user";
+  // Never persist ambiguous "cloud" — resolve at write time when origin known.
+  if (source === "cloud") {
+    source = classifyCloudRecipeSource(opts?.origin ?? prev?.origin ?? "", null);
+  }
   const entry: LocalRecipeEntry = {
     recipe_id: recipeId,
     name,
     kind,
-    source: opts?.source ?? prev?.source ?? "user",
+    source,
     content: JSON.parse(JSON.stringify(content)) as RecipeContent,
     created_at: prev?.created_at ?? t,
     updated_at: t,
@@ -315,8 +286,6 @@ export function saveUserRecipe(
 }
 
 export function deleteUserRecipe(recipeId: string): boolean {
-  // Only removes rows from the user store. Bundled official/starter ids that
-  // were never saved to localStorage cannot be deleted.
   const users = readUserRaw();
   if (!users.some((u) => u.recipe_id === recipeId)) return false;
   writeUserRaw(users.filter((u) => u.recipe_id !== recipeId));
@@ -331,7 +300,6 @@ export function validateLocalContent(
     return { valid: false, message: "Empty recipe" };
   }
   if (!isCoffeeContent(content)) {
-    // Tea: minimal check
     const tea = content as { leaf_g?: number; pours?: unknown[] };
     if (!(Number(tea.leaf_g) > 0) || !Array.isArray(tea.pours) || tea.pours.length < 1) {
       return { valid: false, message: "Tea recipe needs leaf_g and pours" };
@@ -353,10 +321,44 @@ export function validateLocalContent(
   return { valid: true, content };
 }
 
+/** Fallback coffee shape when catalog is empty (no App seed bundled). */
 export function sampleCoffeeIfEmpty(): CoffeeRecipeContent {
-  const first = officialEntries().find((e) => isCoffeeContent(e.content));
-  if (first && isCoffeeContent(first.content)) {
-    return JSON.parse(JSON.stringify(first.content)) as CoffeeRecipeContent;
-  }
   return defaultCoffeeRecipe();
+}
+
+// --- retained helpers used by tests / dedupe tooling ---
+
+export function recipeContentEquivalent(
+  a: RecipeContent,
+  b: RecipeContent,
+): boolean {
+  try {
+    return (
+      JSON.stringify(normalizeContentForCompare(a)) ===
+      JSON.stringify(normalizeContentForCompare(b))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizeContentForCompare(content: RecipeContent): unknown {
+  const c = JSON.parse(JSON.stringify(content)) as Record<string, unknown>;
+  delete c.note;
+  if (typeof c.name === "string") {
+    c.name = c.name.trim().toLowerCase().replace(/\s+/g, " ");
+  }
+  return c;
+}
+
+/** @deprecated no bundled seeds; kept for call-site compatibility */
+export function pruneOfficialClonesFromUserStore(): number {
+  const before = readUserRaw().length;
+  const next = readUserRaw().filter(
+    (u) =>
+      !u.recipe_id.startsWith("official:") &&
+      !u.recipe_id.startsWith("starter:"),
+  );
+  writeUserRaw(next);
+  return before - next.length;
 }

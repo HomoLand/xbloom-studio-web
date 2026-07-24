@@ -514,9 +514,7 @@ export default function Recipes() {
                             ? t("recipes.official")
                             : source === "design"
                               ? t("recipes.design")
-                              : source === "cloud"
-                                ? t("recipes.cloud")
-                                : t("recipes.user")}
+                              : t("recipes.user")}
                         </StatusPill>
                       }
                     />

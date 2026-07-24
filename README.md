@@ -25,11 +25,13 @@ There is **no one-tap sample brew** on Dashboard; always choose a recipe on the 
 
 ### Recipe sources
 
-| Source | What it is |
+| UI label | What it is |
 | --- | --- |
-| **official** | Bundled Skill-style starters (hot/flash coffee + green/oolong/black/jasmine tea). Labeled 官方 in the UI — not xBloom App catalog downloads. |
-| **user / design** | Saved in this browser (`localStorage`). Baihao Yinzhen lives here if you import `public/recipes/tea-baihao-yinzhen.json` (project-authored, not official). |
-| **cloud** | Pulled from your xBloom account (Settings → account session). |
+| **官方 (official)** | From xBloom account sync of **host** coffee/tea (and product) APIs — real App-side catalog, not Skill seeds. |
+| **我的 (user)** | Account **created/shared** recipes from sync, plus anything you save/edit locally. |
+| **设计 (design)** | Candidates saved from the Design page. |
+
+There are **no** bundled fake “official” recipes. Empty catalog until you sync Settings → account.
 
 After a brew finishes, Dashboard shows a complete banner with **View history** and **Brew again**. History supports filter, export JSON/CSV, and re-brew.
 
