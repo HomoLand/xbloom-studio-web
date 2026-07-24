@@ -107,5 +107,22 @@
         { "label": "Steep 2", "ml": 100, "temp_c": 85, "pattern": "center", "pause_s": 20, "flow_ml_s": 3.0 }
       ]
     }
+  },
+  {
+    "recipe_id": "starter:tea-baihao-yinzhen",
+    "name": "白毫银针 · 银芽三泡",
+    "kind": "tea",
+    "source": "official",
+    "content": {
+      "name": "白毫银针 · 银芽三泡",
+      "kind": "tea",
+      "leaf_g": 4,
+      "output_ml_per_steep": 120,
+      "pours": [
+        { "label": "润醒", "ml": 90, "temp_c": 90, "pattern": "circular", "pause_s": 35, "flow_ml_s": 3.5 },
+        { "label": "正泡", "ml": 90, "temp_c": 92, "pattern": "circular", "pause_s": 40, "flow_ml_s": 3.5 },
+        { "label": "回甘", "ml": 90, "temp_c": 93, "pattern": "circular", "pause_s": 45, "flow_ml_s": 3.5 }
+      ]
+    }
   }
 ]
