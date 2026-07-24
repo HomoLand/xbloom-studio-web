@@ -27,6 +27,8 @@ const {
   isOwnedOnCloud,
   listAllLocalRecipes,
   pruneOfficialClonesFromUserStore,
+  pruneRedundantShareCopies,
+  promoteLocalToCloudOwned,
   resolveOwnedTableId,
   saveUserRecipe,
   validateLocalContent,
@@ -190,6 +192,55 @@ describe("owned cloud table id", () => {
     assert.equal(e.table_id, null);
     assert.equal(resolveOwnedTableId(e), null);
     assert.equal(isOwnedOnCloud(e), false);
+  });
+
+  it("dedupes share import after promote/sync to cloud owned", () => {
+    store.set(
+      "xbloom.userRecipes.v1",
+      JSON.stringify([
+        {
+          recipe_id: "share:international:1",
+          name: "over ice",
+          kind: "hot",
+          source: "shared",
+          origin: "shared",
+          content: { ...teaContent, name: "over ice" },
+          created_at: "2020-01-01T00:00:00.000Z",
+          updated_at: "2020-01-01T00:00:00.000Z",
+        },
+        {
+          recipe_id: "cloud:china:99",
+          name: "over ice",
+          kind: "hot",
+          source: "user",
+          origin: "created",
+          table_id: 99,
+          content: { ...teaContent, name: "over ice" },
+          created_at: "2020-01-02T00:00:00.000Z",
+          updated_at: "2020-01-02T00:00:00.000Z",
+        },
+      ]),
+    );
+    assert.ok(pruneRedundantShareCopies() >= 1);
+    const list = listAllLocalRecipes().filter((r) => r.name === "over ice");
+    assert.equal(list.length, 1);
+    assert.equal(list[0]!.source, "user");
+    assert.ok(list[0]!.recipe_id.startsWith("cloud:"));
+  });
+
+  it("promoteLocalToCloudOwned rekeys share id", () => {
+    saveUserRecipe(
+      { ...teaContent, name: "dup" },
+      { recipeId: "share:china:1", source: "shared", origin: "shared" },
+    );
+    const p = promoteLocalToCloudOwned("share:china:1", {
+      content: { ...teaContent, name: "dup" },
+      tableId: 55,
+      region: "china",
+    });
+    assert.equal(p.recipe_id, "cloud:china:55");
+    assert.equal(p.source, "user");
+    assert.equal(listAllLocalRecipes().filter((r) => r.name === "dup").length, 1);
   });
 });
 

@@ -20,6 +20,7 @@ import {
 } from "./xbloomCloud.ts";
 import {
   classifyCloudRecipeSource,
+  pruneRedundantShareCopies,
   saveUserRecipe,
   type LocalRecipeEntry,
 } from "./localRecipes.ts";
@@ -296,6 +297,8 @@ export function importCloudSyncTargets(
     }
     stats.push(st);
   }
+  // Drop share-import clones that now have a cloud-owned twin from this sync.
+  pruneRedundantShareCopies();
   return { stats, entries };
 }
 

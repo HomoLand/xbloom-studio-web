@@ -48,6 +48,7 @@ import {
   getLocalRecipe,
   isOwnedOnCloud,
   listAllLocalRecipes,
+  promoteLocalToCloudOwned,
   resolveOwnedTableId,
   saveUserRecipe,
   toLatestRevision,
@@ -182,13 +183,17 @@ export default function Recipes() {
       loadList();
       if (selectedId) openDetail(selectedId);
     } catch (e) {
-      setError(
-        e instanceof CloudError
-          ? e.message
-          : e instanceof Error
+      if (e instanceof CloudError && e.code === "not_on_account") {
+        setError(t("cloud.notOnAccount"));
+      } else {
+        setError(
+          e instanceof CloudError
             ? e.message
-            : String(e),
-      );
+            : e instanceof Error
+              ? e.message
+              : String(e),
+        );
+      }
     } finally {
       setCloudBusy(null);
     }
@@ -242,31 +247,28 @@ export default function Recipes() {
         confirmWrite: CLOUD_WRITE_CONFIRM,
       });
       if (result.status === "already-present") {
-        setInfo(
-          t("cloud.alreadyPresent").replace(
-            "{id}",
-            String(result.remote_table_id ?? "—"),
-          ),
-        );
+        setInfo(t("cloud.alreadyPresentSimple"));
         if (localEntry && result.remote_table_id) {
-          saveUserRecipe(content, {
-            recipeId: localEntry.recipe_id,
-            source: localEntry.source,
+          const promoted = promoteLocalToCloudOwned(localEntry.recipe_id, {
+            content,
             tableId: result.remote_table_id,
             region: creds.region,
+            shareLink: localEntry.share_link,
+            shareAuthor: localEntry.share_author,
           });
+          openDetail(promoted.recipe_id);
         }
       } else {
-        setInfo(
-          t("cloud.created").replace("{id}", String(result.remote_table_id)),
-        );
-        if (localEntry) {
-          saveUserRecipe(content, {
-            recipeId: localEntry.recipe_id,
-            source: localEntry.source === "official" ? "user" : localEntry.source,
+        setInfo(t("cloud.createdSimple"));
+        if (localEntry && result.remote_table_id) {
+          const promoted = promoteLocalToCloudOwned(localEntry.recipe_id, {
+            content,
             tableId: result.remote_table_id,
             region: creds.region,
+            shareLink: localEntry.share_link,
+            shareAuthor: localEntry.share_author,
           });
+          openDetail(promoted.recipe_id);
         }
       }
     });

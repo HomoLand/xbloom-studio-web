@@ -66,9 +66,13 @@ export const DEFAULT_ACCOUNT_TARGETS = [
 export type AccountTarget = (typeof DEFAULT_ACCOUNT_TARGETS)[number];
 
 export class CloudError extends Error {
-  constructor(message: string) {
+  /** Machine-readable code for UI (e.g. not_on_account). */
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null = null) {
     super(message);
     this.name = "CloudError";
+    this.code = code;
   }
 }
 
@@ -842,7 +846,8 @@ export async function deleteCloudRecipe(opts: {
   }
   if (!found) {
     throw new CloudError(
-      `no created-account recipe with tableId=${remoteTableId}; refusing delete`,
+      "This recipe is not on your account anymore (already deleted or never uploaded).",
+      "not_on_account",
     );
   }
   if (

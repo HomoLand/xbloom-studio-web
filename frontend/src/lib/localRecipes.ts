@@ -248,13 +248,89 @@ function ensureMigratedStore(): LocalRecipeEntry[] {
 }
 
 export function listAllLocalRecipes(): LocalRecipeEntry[] {
+  // Migrate + drop share clones when a cloud-owned twin exists.
+  pruneRedundantShareCopies();
   const entries = ensureMigratedStore();
-  // Official (App) first, then user/design by recency.
+  // Official (App) first, then user/design by recency; shared last among peers.
   return [...entries].sort((a, b) => {
     if (a.source === "official" && b.source !== "official") return -1;
     if (b.source === "official" && a.source !== "official") return 1;
+    if (a.source === "shared" && b.source !== "shared") return 1;
+    if (b.source === "shared" && a.source !== "shared") return -1;
     return (b.updated_at || "").localeCompare(a.updated_at || "");
   });
+}
+
+/**
+ * After share-import → upload → account sync, the same brew may exist as
+ * share:… (分享) and cloud:… (我的). Keep the owned cloud/user row.
+ */
+export function pruneRedundantShareCopies(): number {
+  const raw = readUserRaw();
+  const keep = dedupeShareVsCloudCopies(raw);
+  const removed = raw.length - keep.length;
+  if (removed > 0) writeUserRaw(keep);
+  return removed;
+}
+
+/**
+ * After a successful upload of a local (incl. share-import) recipe, re-key the
+ * row to cloud:{region}:{tableId} as 我的 so a later sync does not create a twin.
+ */
+export function promoteLocalToCloudOwned(
+  oldRecipeId: string,
+  opts: {
+    content: RecipeContent;
+    tableId: number;
+    region: string;
+    shareLink?: string | null;
+    shareAuthor?: string | null;
+  },
+): LocalRecipeEntry {
+  const newId = `cloud:${opts.region}:${opts.tableId}`;
+  if (oldRecipeId !== newId) {
+    deleteUserRecipe(oldRecipeId);
+  }
+  return saveUserRecipe(opts.content, {
+    recipeId: newId,
+    source: "user",
+    tableId: opts.tableId,
+    region: opts.region,
+    origin: "created",
+    shareLink: opts.shareLink,
+    shareAuthor: opts.shareAuthor,
+  });
+}
+
+function dedupeShareVsCloudCopies(
+  entries: LocalRecipeEntry[],
+): LocalRecipeEntry[] {
+  const owned = entries.filter(
+    (e) =>
+      e.recipe_id.startsWith("cloud:") ||
+      (e.source === "user" && e.table_id != null) ||
+      (e.origin === "created" && e.table_id != null),
+  );
+  if (owned.length === 0) return entries;
+
+  return entries.filter((e) => {
+    if (!e.recipe_id.startsWith("share:") && e.source !== "shared") return true;
+    // Drop share clone when an owned copy has same name + content, or same owned table id.
+    const twin = owned.find((o) => {
+      if (e.table_id != null && o.table_id != null && e.table_id === o.table_id) {
+        return true;
+      }
+      return (
+        normalizeRecipeName(o.name) === normalizeRecipeName(e.name) &&
+        recipeContentEquivalent(o.content, e.content)
+      );
+    });
+    return !twin;
+  });
+}
+
+function normalizeRecipeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 export function getLocalRecipe(recipeId: string): LocalRecipeEntry | null {
