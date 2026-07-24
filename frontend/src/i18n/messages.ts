@@ -748,9 +748,9 @@ export const messages: Record<Locale, Record<string, string>> = {
     "cloud.alreadyPresent": "Account already has a same-name recipe (tableId={id})",
     "cloud.created": "Created cloud recipe tableId={id}",
     "cloud.deleted": "Deleted cloud tableId={id}",
-    "cloud.updated": "Updated: deleted {old} → created {new}",
-    "cloud.deleteConfirm": "Permanently delete this recipe from the xBloom account?",
-    "cloud.updateConfirm": "Will delete the cloud recipe then recreate it (update strategy). Continue?",
+    "cloud.updated": "Account recipe updated",
+    "cloud.deleteConfirm": "Delete this recipe from your xBloom account?",
+    "cloud.updateConfirm": "Overwrite the recipe on your account with the current content?",
 
     "design.title": "Design",
     "design.desc": "Generate brew recipes with a multimodal model from text/photos.",
