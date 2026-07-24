@@ -2,10 +2,25 @@
  * Recipe browser — local-first; optional official account cloud sync.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Cloud, CloudUpload, Play, RefreshCw, Trash2 } from "lucide-react";
-import type { RecipeContent, RecipeRecord, RecipeRevision } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import {
+  Cloud,
+  CloudUpload,
+  Download,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import type {
+  CoffeeRecipeContent,
+  RecipeContent,
+  RecipeRecord,
+  RecipeRevision,
+} from "../api";
 import {
   BrewConfirmDialog,
   type BrewTarget,
@@ -35,6 +50,12 @@ import {
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
 import { isCoffeeContent } from "../lib/recipeDomain";
+import {
+  downloadText,
+  exportRecipesJson,
+  exportSingleRecipeJson,
+  importRecipesFromJson,
+} from "../lib/recipeIo";
 import { importCloudBrewRecords } from "../lib/localHistory";
 import {
   CLOUD_DELETE_CONFIRM,
@@ -50,7 +71,8 @@ import { useMachine } from "../machine/MachineContext";
 
 export default function Recipes() {
   const { t } = useI18n();
-  const { driver } = useMachine();
+  const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
+  const [searchParams] = useSearchParams();
   const [recipes, setRecipes] = useState<RecipeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +83,7 @@ export default function Recipes() {
   const [localEntry, setLocalEntry] = useState<LocalRecipeEntry | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const loadList = useCallback(() => {
     setError(null);
@@ -75,11 +98,7 @@ export default function Recipes() {
     }
   }, []);
 
-  useEffect(() => {
-    loadList();
-  }, [loadList]);
-
-  const openDetail = (recipeId: string) => {
+  const openDetail = useCallback((recipeId: string) => {
     setSelectedId(recipeId);
     const entry = getLocalRecipe(recipeId);
     if (!entry) {
@@ -93,7 +112,16 @@ export default function Recipes() {
     setLatest(toLatestRevision(entry));
     setLocalEntry(entry);
     setError(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    loadList();
+  }, [loadList]);
+
+  useEffect(() => {
+    const sel = searchParams.get("selected");
+    if (sel) openDetail(sel);
+  }, [searchParams, openDetail]);
 
   const content: RecipeContent | null = latest?.content ?? null;
   const canBrewWebBle =
@@ -284,15 +312,67 @@ export default function Recipes() {
     loadList();
   };
 
+  const onImportFile = async (file: File) => {
+    setError(null);
+    setInfo(null);
+    try {
+      const text = await file.text();
+      const result = importRecipesFromJson(text);
+      if (result.errors.length) {
+        setError(result.errors.slice(0, 3).join("; "));
+      }
+      setInfo(
+        t("recipes.importDone").replace("{n}", String(result.imported)),
+      );
+      loadList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const onSaveSlot = async () => {
+    if (!content || !isCoffeeContent(content)) {
+      setError(t("recipes.slotCoffeeOnly"));
+      return;
+    }
+    setError(null);
+    setInfo(null);
+    setCloudBusy("slot");
+    try {
+      if (
+        bleSnapshot.phase === "idle" ||
+        bleSnapshot.phase === "disconnected" ||
+        bleSnapshot.phase === "error"
+      ) {
+        await connectBle();
+      }
+      await bleSession.saveSlots([content as CoffeeRecipeContent]);
+      setInfo(t("recipes.slotSaved"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCloudBusy(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
         title={t("recipes.title")}
         description={t("recipes.desc")}
         actions={
-          <IconButton label={t("recipes.refresh")} onClick={() => loadList()}>
-            <RefreshCw className="h-4 w-4" aria-hidden />
-          </IconButton>
+          <div className="flex flex-wrap items-center gap-1">
+            <Link
+              to="/recipes/edit"
+              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-ink px-3 text-xs font-medium text-paper hover:bg-white/90"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              {t("recipes.new")}
+            </Link>
+            <IconButton label={t("recipes.refresh")} onClick={() => loadList()}>
+              <RefreshCw className="h-4 w-4" aria-hidden />
+            </IconButton>
+          </div>
         }
       />
 
@@ -324,6 +404,38 @@ export default function Recipes() {
           <Cloud className="h-3.5 w-3.5" aria-hidden />
           {cloudBusy === "sync" ? t("common.loading") : t("cloud.sync")}
         </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() =>
+            downloadText(
+              `xbloom-recipes-${new Date().toISOString().slice(0, 10)}.json`,
+              exportRecipesJson(),
+            )
+          }
+        >
+          <Download className="h-3.5 w-3.5" aria-hidden />
+          {t("recipes.exportAll")}
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload className="h-3.5 w-3.5" aria-hidden />
+          {t("recipes.import")}
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onImportFile(f);
+            e.target.value = "";
+          }}
+        />
         <span className="text-xs text-ink-faint">{t("cloud.actionsUseSettings")}</span>
       </div>
 
@@ -491,6 +603,40 @@ export default function Recipes() {
                   <Play className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.brew")}
                 </Button>
+                <Link
+                  to={`/recipes/edit?id=${encodeURIComponent(detail.recipe_id)}`}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface-2 px-3 text-xs font-medium text-ink hover:bg-surface-3"
+                >
+                  <Pencil className="h-3.5 w-3.5" aria-hidden />
+                  {t("recipes.edit")}
+                </Link>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    downloadText(
+                      `${detail.name.replace(/\s+/g, "-")}.json`,
+                      exportSingleRecipeJson(content),
+                    )
+                  }
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden />
+                  JSON
+                </Button>
+                {isCoffeeContent(content) ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={
+                      cloudBusy != null || driver !== "web-bluetooth"
+                    }
+                    onClick={() => void onSaveSlot()}
+                  >
+                    {cloudBusy === "slot"
+                      ? t("common.loading")
+                      : t("recipes.saveSlot")}
+                  </Button>
+                ) : null}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -534,6 +680,13 @@ export default function Recipes() {
                   <span className="text-xs text-ink-muted">
                     {t("recipes.needWebBle")}
                   </span>
+                ) : null}
+                {isCoffeeContent(content) && content.kind === "flash-brew" ? (
+                  <p className="w-full text-xs text-ink-faint">
+                    {t("recipes.flashHint")
+                      .replace("{ice}", String(content.ice_g ?? "—"))
+                      .replace("{hot}", String(content.hot_water_ml ?? content.water_ml))}
+                  </p>
                 ) : null}
               </div>
             </div>

@@ -163,6 +163,19 @@ export function buildStart(): Uint8Array {
   return xbloomFrame(START_OPCODE, BREW_SEQ, new Uint8Array([0x01]));
 }
 
+/**
+ * Pause a running automatic coffee brew.
+ * Same bytes as start (40518); intent is state-sensitive (running → pause).
+ */
+export function buildCoffeePause(): Uint8Array {
+  return buildStart();
+}
+
+/** Resume paused coffee (j15 command 40524). Golden ``5801014c9e0c00000001d748``. */
+export function buildCoffeeResume(): Uint8Array {
+  return j15Frame(40524);
+}
+
 /** Cancel. Byte-exact ``580101479e0c00000001553e``. */
 export function buildCancel(): Uint8Array {
   return xbloomFrame(CANCEL_OPCODE, BREW_SEQ, new Uint8Array([0x01]));

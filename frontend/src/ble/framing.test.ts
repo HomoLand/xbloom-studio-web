@@ -56,4 +56,12 @@ describe("j15Frame", () => {
     const frame = j15Frame(40519, { raw: new Uint8Array([0x01]) });
     assert.equal(bytesToHex(frame), "580101479e0d0000000101b410");
   });
+
+  it("buildCoffeeResume matches Python 40524 golden", async () => {
+    const { buildCoffeeResume, buildCoffeePause, buildStart } = await import(
+      "./framing.ts"
+    );
+    assert.equal(bytesToHex(buildCoffeeResume()), "5801014c9e0c00000001d748");
+    assert.equal(bytesToHex(buildCoffeePause()), bytesToHex(buildStart()));
+  });
 });

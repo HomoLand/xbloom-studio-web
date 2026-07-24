@@ -25,7 +25,14 @@ import {
   buildScaleExit,
   buildScaleTare,
 } from "./extras.ts";
-import { buildCancel, buildCommit, buildStart } from "./framing.ts";
+import { buildSlotBatch } from "./slots.ts";
+import {
+  buildCancel,
+  buildCoffeePause,
+  buildCoffeeResume,
+  buildCommit,
+  buildStart,
+} from "./framing.ts";
 import {
   connectGatt,
   disconnectGatt,
@@ -55,6 +62,10 @@ export type BrewJournalMeta = {
   recipe_revision_id?: string;
   workflow_id?: string;
   kind?: string;
+  /** Target total water (ml) for Live View progress. */
+  target_water_ml?: number;
+  /** Number of pour stages for progress UI. */
+  pour_count?: number;
 };
 
 export type SessionPhase =
@@ -65,6 +76,7 @@ export type SessionPhase =
   | "armed"
   | "starting"
   | "brewing"
+  | "paused"
   | "terminal"
   | "error"
   | "disconnected";
@@ -82,7 +94,8 @@ export function shouldEnterTerminalPhase(
     phase === "loading" ||
     phase === "armed" ||
     phase === "starting" ||
-    phase === "brewing";
+    phase === "brewing" ||
+    phase === "paused";
   if (!activeBrewPhase) return false;
   if (isBrewTerminalState(machineState)) return true;
   // Return to idle after brew/cancel.
@@ -101,6 +114,12 @@ export type SessionSnapshot = {
   cupWeightG: number | null;
   dispensedWaterMl: number | null;
   loaded: boolean;
+  /** Live telemetry buffer for current brew (copy). */
+  telemetrySamples: TelemetrySample[];
+  brewElapsedMs: number | null;
+  targetWaterMl: number | null;
+  pourCount: number | null;
+  recipeName: string | null;
 };
 
 type Listener = (snap: SessionSnapshot) => void;
@@ -152,6 +171,12 @@ export class WebBleSession {
       cupWeightG: this.cupWeightG,
       dispensedWaterMl: this.dispensedWaterMl,
       loaded: this.loaded,
+      telemetrySamples: this.telemetrySamples.slice(),
+      brewElapsedMs:
+        this.brewStartedAtMs != null ? Date.now() - this.brewStartedAtMs : null,
+      targetWaterMl: this.brewMeta?.target_water_ml ?? null,
+      pourCount: this.brewMeta?.pour_count ?? null,
+      recipeName: this.brewMeta?.recipe_name ?? null,
     };
   }
 
@@ -190,6 +215,7 @@ export class WebBleSession {
       this.phase === "armed" ||
       this.phase === "starting" ||
       this.phase === "brewing" ||
+      this.phase === "paused" ||
       this.phase === "terminal";
     if (!active || this.brewStartedAtMs == null) return;
     const now = Date.now();
@@ -452,16 +478,23 @@ export class WebBleSession {
         throw new BleGattError("Connect to the machine before loading.", "not_connected");
       }
     }
+    const targetWater =
+      Number(content.water_ml) ||
+      content.pours.reduce((s, p) => s + Number(p.ml || 0), 0);
     if (opts.journal) {
       this.beginBrewJournal({
         ...opts.journal,
         recipe_name: opts.journal.recipe_name ?? content.name,
         kind: opts.journal.kind ?? content.kind,
+        target_water_ml: opts.journal.target_water_ml ?? targetWater,
+        pour_count: opts.journal.pour_count ?? content.pours.length,
       });
     } else if (!this.brewMeta) {
       this.beginBrewJournal({
         recipe_name: content.name,
         kind: content.kind,
+        target_water_ml: targetWater,
+        pour_count: content.pours.length,
       });
     }
     const frames = buildLoadFrames(coffeeContentToProtocol(content));
@@ -580,6 +613,38 @@ export class WebBleSession {
     await this.disconnect();
   }
 
+  /**
+   * Pause a running automatic coffee brew (40518 while running).
+   * State-sensitive: only valid during active brew.
+   */
+  async pauseBrew(): Promise<void> {
+    if (this.phase !== "brewing" && this.phase !== "starting") {
+      throw new BleGattError(
+        "Pause requires an active brew (starting/brewing).",
+        "not_brewing",
+      );
+    }
+    await this.requireWrite(buildCoffeePause());
+    this.phase = "paused";
+    this.maybeSampleTelemetry();
+    this.emit();
+  }
+
+  /** Resume a paused automatic coffee brew (40524). */
+  async resumeBrew(): Promise<void> {
+    if (this.phase !== "paused") {
+      throw new BleGattError(
+        "Resume requires a paused brew session.",
+        "not_paused",
+      );
+    }
+    await this.requireWrite(buildCoffeeResume());
+    this.phase = "brewing";
+    this.maybeSampleTelemetry();
+    this.watchTerminalAndRelease();
+    this.emit();
+  }
+
   // ---------------------------------------------------------------------------
   // FreeSolo extras: scale / grinder / hot water (parity with core protocol)
   // ---------------------------------------------------------------------------
@@ -628,6 +693,24 @@ export class WebBleSession {
     await this.requireWrite(buildBrewerQuit());
   }
 
+  /**
+   * Program Easy-Mode slots A/B/C (batch of three). Does not brew.
+   * Missing B/C reuse recipe A. Requires coffee content without bypass.
+   */
+  async saveSlots(
+    recipes: [
+      CoffeeRecipeContent,
+      CoffeeRecipeContent?,
+      CoffeeRecipeContent?,
+    ],
+  ): Promise<void> {
+    const frames = buildSlotBatch(recipes);
+    for (const frame of frames) {
+      await this.requireWrite(frame);
+      await sleep(120);
+    }
+  }
+
   private watchTerminalAndRelease(): void {
     this.stopTerminalWatch();
     this.terminalWatch = setInterval(() => {
@@ -660,10 +743,7 @@ export class WebBleSession {
   }
 
   private async requireWrite(frame: Uint8Array): Promise<void> {
-    if (
-      this.phase === "idle" ||
-      this.phase === "connecting"
-    ) {
+    if (this.phase === "idle" || this.phase === "connecting") {
       throw new BleGattError("Not connected to a machine.", "not_connected");
     }
     await this.ensureLinked();

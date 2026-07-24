@@ -5,10 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b0b0c" />
     <meta name="color-scheme" content="dark" />
+    <meta name="description" content="xBloom Studio Web — Web Bluetooth brew control" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./studio-machine.png" />
     <title>xBloom Studio</title>
   </head>
   <body class="bg-paper text-ink">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          const base = document.querySelector("base")?.href || "./";
+          const sw = new URL("sw.js", base || location.href).pathname;
+          navigator.serviceWorker.register(sw).catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

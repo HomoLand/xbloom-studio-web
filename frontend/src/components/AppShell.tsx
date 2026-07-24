@@ -10,6 +10,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
+import { Onboarding } from "./Onboarding";
 import { cx, StatusPill } from "./ui";
 
 export function AppShell() {
@@ -28,6 +29,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
+      <Onboarding />
       <aside className="hidden w-56 shrink-0 flex-col border-r border-line bg-surface/80 backdrop-blur-md md:flex">
         <div className="border-b border-line px-4 py-4">
           <div className="text-[15px] font-semibold tracking-tight text-ink">

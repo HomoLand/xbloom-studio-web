@@ -564,9 +564,35 @@ export default function Dashboard() {
         return;
       }
 
-      if (webBle && (action === "pause" || action === "resume" || action === "stop" || action === "reconcile")) {
+      if (webBle && action === "pause") {
+        setActionBusy(action);
+        try {
+          await bleSession.pauseBrew();
+        } catch (e) {
+          setActionError(e instanceof Error ? e.message : String(e));
+        } finally {
+          if (!stopPollsRef.current) setActionBusy(null);
+        }
+        return;
+      }
+      if (webBle && action === "resume") {
+        setActionBusy(action);
+        try {
+          await bleSession.resumeBrew();
+        } catch (e) {
+          setActionError(e instanceof Error ? e.message : String(e));
+        } finally {
+          if (!stopPollsRef.current) setActionBusy(null);
+        }
+        return;
+      }
+      if (webBle && (action === "stop" || action === "reconcile")) {
         setActionError(`${action} is not available on Web Bluetooth yet`);
-        setActionGuidance("Use Cancel for Web Bluetooth, or switch driver to bridge.");
+        setActionGuidance(
+          action === "stop"
+            ? "Use Cancel for Web Bluetooth, or switch driver to bridge."
+            : "Reconcile is bridge-only.",
+        );
         return;
       }
 
@@ -659,7 +685,18 @@ export default function Dashboard() {
       bleSnapshot.phase === "armed" ||
       bleSnapshot.phase === "starting" ||
       bleSnapshot.phase === "brewing" ||
+      bleSnapshot.phase === "paused" ||
       bleSnapshot.loaded);
+  const webBleCanPause =
+    webBle &&
+    (bleSnapshot.phase === "brewing" || bleSnapshot.phase === "starting");
+  const webBleCanResume = webBle && bleSnapshot.phase === "paused";
+  const liveBrewing =
+    webBle &&
+    (bleSnapshot.phase === "starting" ||
+      bleSnapshot.phase === "brewing" ||
+      bleSnapshot.phase === "paused" ||
+      bleSnapshot.phase === "loading");
 
   // connection_scope null -> none; do not invent daemon/connected (own pills).
   const connectionScope =
@@ -769,10 +806,15 @@ export default function Dashboard() {
                 />
                 <div className="mt-3 text-center">
                   <div className="text-sm font-semibold tracking-tight text-ink">
-                    {bleSnapshot.deviceName || "xBloom [Studio]"}
+                    {bleSnapshot.recipeName ||
+                      bleSnapshot.deviceName ||
+                      "xBloom [Studio]"}
                   </div>
                   <div className="mt-0.5 text-xs text-ink-faint">
                     {bleSnapshot.machineStateName ?? bleSnapshot.phase}
+                    {bleSnapshot.brewElapsedMs != null && liveBrewing
+                      ? ` · ${formatElapsed(bleSnapshot.brewElapsedMs)}`
+                      : ""}
                   </div>
                 </div>
               </div>
@@ -796,6 +838,64 @@ export default function Dashboard() {
                   unit={bleSnapshot.dispensedWaterMl != null ? "ml" : undefined}
                 />
               </div>
+              {liveBrewing ||
+              (bleSnapshot.telemetrySamples?.length ?? 0) > 1 ? (
+                <div className="border-t border-line px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between text-[11px] text-ink-muted">
+                    <span>{t("dashboard.liveTelemetry")}</span>
+                    {bleSnapshot.targetWaterMl != null &&
+                    bleSnapshot.dispensedWaterMl != null ? (
+                      <span className="tabular-nums">
+                        {Math.min(
+                          100,
+                          Math.round(
+                            (bleSnapshot.dispensedWaterMl /
+                              Math.max(1, bleSnapshot.targetWaterMl)) *
+                              100,
+                          ),
+                        )}
+                        %
+                      </span>
+                    ) : null}
+                  </div>
+                  {bleSnapshot.targetWaterMl != null ? (
+                    <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-surface-3">
+                      <div
+                        className="h-full rounded-full bg-brand transition-[width] duration-300"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round(
+                              ((bleSnapshot.dispensedWaterMl ?? 0) /
+                                Math.max(1, bleSnapshot.targetWaterMl)) *
+                                100,
+                            ),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  <LiveTelemetryChart
+                    samples={bleSnapshot.telemetrySamples ?? []}
+                  />
+                  <div className="mt-2 flex gap-3 text-[10px] text-ink-faint">
+                    <span className="inline-flex items-center gap-1">
+                      <span
+                        className="inline-block h-1.5 w-3 rounded-sm"
+                        style={{ background: "var(--color-chart-water)" }}
+                      />
+                      {t("dashboard.water")}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span
+                        className="inline-block h-1.5 w-3 rounded-sm"
+                        style={{ background: "var(--color-chart-coffee)" }}
+                      />
+                      {t("dashboard.cup")}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -862,6 +962,32 @@ export default function Dashboard() {
               >
                 {t("dashboard.brewSample")}
               </Button>
+              {webBleCanPause ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => void runControl("pause")}
+                >
+                  <Pause className="h-3.5 w-3.5" aria-hidden />
+                  {actionBusy === "pause"
+                    ? t("dashboard.pausing")
+                    : t("dashboard.pause")}
+                </Button>
+              ) : null}
+              {webBleCanResume ? (
+                <Button
+                  variant="success"
+                  size="sm"
+                  disabled={actionBusy !== null}
+                  onClick={() => void runControl("resume")}
+                >
+                  <Play className="h-3.5 w-3.5" aria-hidden />
+                  {actionBusy === "resume"
+                    ? t("dashboard.resuming")
+                    : t("dashboard.resume")}
+                </Button>
+              ) : null}
               {webBleCanCancel ? (
                 <Button
                   variant="secondary"
@@ -1459,6 +1585,69 @@ function formatEventTime(value: string | number): string {
     }
   }
   return value;
+}
+
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function LiveTelemetryChart({
+  samples,
+}: {
+  samples: Array<{
+    t: number;
+    cupWeightG?: number | null;
+    dispensedWaterMl?: number | null;
+  }>;
+}) {
+  const w = 320;
+  const h = 72;
+  const pad = 4;
+  if (samples.length < 2) {
+    return (
+      <p className="text-[11px] text-ink-faint">Collecting samples…</p>
+    );
+  }
+  const xs = samples.map((s) => s.t);
+  const water = samples.map((s) => s.dispensedWaterMl ?? 0);
+  const cup = samples.map((s) => s.cupWeightG ?? 0);
+  const tMin = Math.min(...xs);
+  const tMax = Math.max(...xs) || 1;
+  const wMax = Math.max(...water, 1);
+  const cMax = Math.max(...cup, 1);
+  const pathFor = (vals: number[], vmax: number) =>
+    vals
+      .map((v, i) => {
+        const x =
+          pad + ((xs[i]! - tMin) / (tMax - tMin || 1)) * (w - pad * 2);
+        const y = h - pad - (v / vmax) * (h - pad * 2);
+        return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="w-full rounded-xl border border-line bg-paper"
+      role="img"
+      aria-label="Live brew telemetry"
+    >
+      <path
+        d={pathFor(water, wMax)}
+        fill="none"
+        stroke="var(--color-chart-water)"
+        strokeWidth="1.75"
+      />
+      <path
+        d={pathFor(cup, cMax)}
+        fill="none"
+        stroke="var(--color-chart-coffee)"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
 }
 
 function formatDisconnect(bridge: BridgeState): string {

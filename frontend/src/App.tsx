@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Design from "./pages/Design";
 import History from "./pages/History";
 import Pair from "./pages/Pair";
+import RecipeEdit from "./pages/RecipeEdit";
 import Recipes from "./pages/Recipes";
 import Settings from "./pages/Settings";
 import Tools from "./pages/Tools";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/design" element={<Design />} />
         <Route path="/recipes" element={<Recipes />} />
+        <Route path="/recipes/edit" element={<RecipeEdit />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings />} />

@@ -1,0 +1,19 @@
+{
+  "name": "xBloom Studio",
+  "short_name": "xBloom",
+  "description": "Near-field Web Bluetooth control and local recipes for xBloom Studio",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0b0c",
+  "theme_color": "#0b0b0c",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "studio-machine.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
