@@ -27,8 +27,8 @@ There is **no one-tap sample brew** on Dashboard; always choose a recipe on the 
 
 | Source | What it is |
 | --- | --- |
-| **official / starter** | Bundled starter templates (hot/flash coffee + green/oolong/black/jasmine/silver-needle tea). Not test placeholders — you can edit a copy or ignore them. |
-| **user / design** | Saved in this browser (`localStorage`). |
+| **official** | Bundled Skill-style starters (hot/flash coffee + green/oolong/black/jasmine tea). Labeled 官方 in the UI — not xBloom App catalog downloads. |
+| **user / design** | Saved in this browser (`localStorage`). Baihao Yinzhen lives here if you import `public/recipes/tea-baihao-yinzhen.json` (project-authored, not official). |
 | **cloud** | Pulled from your xBloom account (Settings → account session). |
 
 After a brew finishes, Dashboard shows a complete banner with **View history** and **Brew again**. History supports filter, export JSON/CSV, and re-brew.

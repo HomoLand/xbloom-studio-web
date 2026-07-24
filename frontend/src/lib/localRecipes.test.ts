@@ -54,17 +54,16 @@ describe("listAllLocalRecipes", () => {
     assert.ok(rec.latest_revision?.content);
   });
 
-  it("dedupes imported user clone of Baihao Yinzhen against official starter", () => {
-    const official = listAllLocalRecipes().find((r) =>
-      r.name.includes("白毫银针"),
+  it("dedupes imported user clone against a bundled official tea", () => {
+    const official = listAllLocalRecipes().find(
+      (r) => r.source === "official" && r.kind === "tea",
     );
-    assert.ok(official, "bundled Baihao starter missing");
-    // Simulate import of public/recipes/tea-baihao-yinzhen.json as a user recipe.
+    assert.ok(official, "bundled official tea missing");
     store.set(
       "xbloom.userRecipes.v1",
       JSON.stringify([
         {
-          recipe_id: "user:clone-baihao",
+          recipe_id: "user:clone-tea",
           name: official!.name,
           kind: "tea",
           source: "user",
@@ -74,15 +73,14 @@ describe("listAllLocalRecipes", () => {
         },
       ]),
     );
-    // Force prune path (module may have pruned once already in this process).
     pruneOfficialClonesFromUserStore();
-    const list = listAllLocalRecipes().filter((r) =>
-      r.name.includes("白毫银针"),
+    const list = listAllLocalRecipes().filter(
+      (r) => r.name === official!.name,
     );
     assert.equal(
       list.length,
       1,
-      `expected 1 Baihao entry, got ${list.map((r) => r.source + ":" + r.recipe_id).join(",")}`,
+      `expected 1 entry, got ${list.map((r) => r.source + ":" + r.recipe_id).join(",")}`,
     );
     assert.equal(list[0]!.source, "official");
   });
