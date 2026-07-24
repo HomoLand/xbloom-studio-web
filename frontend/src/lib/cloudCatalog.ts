@@ -14,6 +14,7 @@ import type {
 } from "../api.ts";
 import {
   collectRecipeRecords,
+  fetchShareRecipeDetail,
   type CloudRegion,
   type CloudSyncTargetResult,
 } from "./xbloomCloud.ts";
@@ -262,14 +263,29 @@ export function importCloudSyncTargets(
           norm.table_id != null
             ? `cloud:${region}:${norm.table_id}`
             : `cloud:${region}:${hashName(norm.name)}`;
-        // coffee/tea host APIs → 官方; created/shared → 我的 (core catalog origin).
+        // coffee/tea host → 官方; created → 我的; shared list → 分享.
         const source = classifyCloudRecipeSource(t.target, raw);
+        const shareLink = first(raw, "shareRecipeLink", "share_link");
+        const shareAuthor = first(
+          raw,
+          "resourceMemberName",
+          "shareMemberName",
+          "author",
+        );
         const entry = saveUserRecipe(norm.content, {
           recipeId,
           source,
           tableId: norm.table_id ?? undefined,
           region,
           origin: t.target,
+          shareLink:
+            typeof shareLink === "string" && shareLink.startsWith("http")
+              ? shareLink
+              : undefined,
+          shareAuthor:
+            typeof shareAuthor === "string" && shareAuthor.trim()
+              ? shareAuthor.trim()
+              : undefined,
         });
         entries.push(entry);
         st.imported += 1;
@@ -289,4 +305,58 @@ function hashName(name: string): string {
     h = (Math.imul(31, h) + name.charCodeAt(i)) | 0;
   }
   return `n${(h >>> 0).toString(16)}`;
+}
+
+/**
+ * Import a public App share H5 link (or bare id) into the local catalog as 分享.
+ */
+export async function importShareLink(
+  shareUrlOrId: string,
+  opts?: { region?: CloudRegion },
+): Promise<LocalRecipeEntry> {
+  const detail = await fetchShareRecipeDetail(shareUrlOrId, {
+    region: opts?.region,
+  });
+  const vo = { ...detail.recipeVo };
+  // H5 sometimes keeps pours only as pourList; normaliser accepts that.
+  if (
+    (!vo.pourDataJSONStr || vo.pourDataJSONStr === "[]") &&
+    Array.isArray(vo.pourList) &&
+    vo.pourList.length
+  ) {
+    // already fine
+  }
+  // Attach tea output hint from detail envelope if present.
+  const teaOut = (detail.raw as { teaRecipePerVolumn?: unknown })
+    .teaRecipePerVolumn;
+  if (teaOut != null && vo.outputMlPerSteep == null) {
+    vo.outputMlPerSteep = teaOut;
+  }
+  const kindHint =
+    Number(vo.cupType) === 4 || String(vo.cupTypeName || "").toUpperCase() === "TEA"
+      ? "tea"
+      : "auto";
+  const norm = normaliseCloudRecipe(vo, kindHint);
+  if (
+    Array.isArray(vo.pourList) &&
+    vo.pourList.length === 0 &&
+    Number(vo.pourCount) > 0
+  ) {
+    throw new Error(
+      "Share detail returned no pour stages (empty pourList). Try the China/International region, or open the link in the official App once.",
+    );
+  }
+  const recipeId =
+    norm.table_id != null
+      ? `share:${detail.region}:${norm.table_id}`
+      : `share:${detail.region}:${hashName(norm.name)}`;
+  return saveUserRecipe(norm.content, {
+    recipeId,
+    source: "shared",
+    tableId: norm.table_id ?? detail.table_id ?? undefined,
+    region: detail.region,
+    origin: "shared",
+    shareLink: detail.share_link,
+    shareAuthor: detail.share_author,
+  });
 }

@@ -981,3 +981,318 @@ export function collectRecipeRecords(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Share links (App H5 + account share list)
+// ---------------------------------------------------------------------------
+
+/** Public share page hosts (from share-h5 SPA + support docs). */
+export const SHARE_H5_BASES = {
+  international: "https://share-h5.xbloom.com/",
+  china: "https://share-h5.xbloomcoffee.cn/",
+} as const;
+
+/** H5 detail API (decoded from share-h5 bundle: POST /RecipeDetail.html). */
+export const RECIPE_DETAIL_ENDPOINT = "RecipeDetail.html";
+
+/**
+ * Endpoints that exist on the tenant and require login (probed 2026-07).
+ * First success that returns a share URL wins.
+ */
+export const SHARE_CREATE_ENDPOINTS = [
+  "tuRecipeShare.tuhtml",
+  "tuShareRecipe.tuhtml",
+  "tuRecipeShareLink.tuhtml",
+  "tuRecipeShareAdd.tuhtml",
+  "tuMyRecipeShare.tuhtml",
+  "tuShareAdd.tuhtml",
+  "tuCreateShare.tuhtml",
+] as const;
+
+export function parseShareLinkId(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  try {
+    if (raw.includes("://") || raw.startsWith("//")) {
+      const u = new URL(raw.startsWith("//") ? `https:${raw}` : raw);
+      const id = u.searchParams.get("id");
+      if (id) return decodeURIComponent(id);
+    }
+  } catch {
+    /* fall through */
+  }
+  // Bare id (often already URL-encoded base64)
+  if (/^[A-Za-z0-9_+\-/%=]+$/.test(raw) && raw.length >= 8) {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+  return null;
+}
+
+export function regionForShareUrl(url: string): CloudRegion {
+  const s = url.toLowerCase();
+  if (s.includes("xbloomcoffee.cn") || s.includes("-cn")) return "china";
+  return "international";
+}
+
+export type ShareRecipeDetail = {
+  raw: Record<string, unknown>;
+  recipeVo: Record<string, unknown>;
+  share_link: string | null;
+  share_author: string | null;
+  table_id: number | null;
+  region: CloudRegion;
+};
+
+/**
+ * Resolve an App share URL / id via public RecipeDetail.html (no login).
+ * CORS allows browser origins (Access-Control-Allow-Origin: *).
+ */
+export async function fetchShareRecipeDetail(
+  shareUrlOrId: string,
+  opts?: { region?: CloudRegion; timeoutMs?: number },
+): Promise<ShareRecipeDetail> {
+  const id = parseShareLinkId(shareUrlOrId);
+  if (!id) {
+    throw new CloudError("Could not parse share link id (need ?id=… or bare token).");
+  }
+  const preferred =
+    opts?.region ??
+    (shareUrlOrId.includes("://")
+      ? regionForShareUrl(shareUrlOrId)
+      : "international");
+  const regions: CloudRegion[] =
+    preferred === "china"
+      ? ["china", "international"]
+      : ["international", "china"];
+
+  let lastErr: unknown;
+  for (const region of regions) {
+    try {
+      const detail = await postRecipeDetail(region, id, opts?.timeoutMs);
+      if (detail) return detail;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof CloudError
+    ? lastErr
+    : new CloudError(
+        `Share lookup failed: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
+      );
+}
+
+async function postRecipeDetail(
+  region: CloudRegion,
+  tableIdOfRSA: string,
+  timeoutMs = 20_000,
+): Promise<ShareRecipeDetail | null> {
+  const base = BASE_URLS[region];
+  const body = JSON.stringify({
+    tableIdOfRSA,
+    interfaceVersion: CATALOG_INTERFACE_VERSION,
+    skey: APP_SKEY,
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(base + RECIPE_DETAIL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "xbloom-studio-web-share/1",
+      },
+      body,
+      signal: controller.signal,
+      mode: "cors",
+      credentials: "omit",
+    });
+    const text = await res.text();
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new CloudError(`RecipeDetail returned non-JSON (${res.status})`);
+    }
+    if (payload.result !== "success" && payload.info) {
+      throw new CloudError(String(payload.info));
+    }
+    const recipeVo = payload.recipeVo;
+    if (!recipeVo || typeof recipeVo !== "object") {
+      return null;
+    }
+    const vo = recipeVo as Record<string, unknown>;
+    // Some tenants return empty pourList; refuse empty programs.
+    const pours = vo.pourList ?? vo.pourDataJSONStr ?? vo.pours;
+    const pourLen = Array.isArray(pours)
+      ? pours.length
+      : typeof pours === "string" && pours.startsWith("[")
+        ? 1
+        : 0;
+    if (pourLen === 0 && Number(vo.pourCount || 0) === 0) {
+      return null;
+    }
+    const link =
+      typeof vo.shareRecipeLink === "string"
+        ? vo.shareRecipeLink
+        : typeof payload.shareRecipeLink === "string"
+          ? payload.shareRecipeLink
+          : `${SHARE_H5_BASES[region]}?id=${encodeURIComponent(tableIdOfRSA)}`;
+    const author =
+      (typeof payload.shareMemberName === "string" && payload.shareMemberName) ||
+      (typeof vo.resourceMemberName === "string" && vo.resourceMemberName) ||
+      null;
+    const tableId = Number(vo.tableId ?? vo.table_id);
+    return {
+      raw: payload,
+      recipeVo: vo,
+      share_link: link,
+      share_author: author,
+      table_id: Number.isFinite(tableId) ? tableId : null,
+      region,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Ask the cloud for a shareable H5 link for an owned recipe tableId.
+ * Tries several login-gated endpoints (decoded by probing; field names may vary).
+ */
+export async function createCloudShareLink(opts: {
+  email: string;
+  password: string;
+  region: string;
+  tableId: number;
+  /** Existing share URL from a prior sync, if any. */
+  existingShareLink?: string | null;
+  languageType?: number;
+  timeoutMs?: number;
+}): Promise<{
+  share_link: string;
+  source: "existing" | "created" | "refreshed";
+  endpoint?: string;
+}> {
+  if (
+    opts.existingShareLink &&
+    opts.existingShareLink.startsWith("http") &&
+    opts.existingShareLink.includes("id=")
+  ) {
+    return { share_link: opts.existingShareLink, source: "existing" };
+  }
+
+  const { region, session } = await loginEphemeral(opts);
+  const tableId = Math.trunc(opts.tableId);
+  if (!Number.isFinite(tableId) || tableId <= 0) {
+    throw new CloudError("create share requires a valid cloud tableId");
+  }
+
+  // Prefer re-reading owned lists — many records already carry shareRecipeLink.
+  for (const target of ["created", "shared", "product"] as const) {
+    try {
+      const payload = await cloudRequest(
+        BASE_URLS[region],
+        ENDPOINTS[target],
+        { ...session, adaptedModel: 1 },
+        opts.timeoutMs,
+      );
+      for (const raw of collectRecipeRecords(payload)) {
+        const id = Number(raw.tableId ?? raw.table_id ?? raw.recipeId);
+        if (id !== tableId) continue;
+        const link = raw.shareRecipeLink ?? raw.share_link;
+        if (typeof link === "string" && link.startsWith("http")) {
+          return { share_link: link, source: "refreshed", endpoint: target };
+        }
+      }
+    } catch {
+      /* continue */
+    }
+  }
+
+  const attempts: Array<Record<string, unknown>> = [
+    { ...session, tableId, adaptedModel: 1 },
+    { ...session, tableId, interfaceVersion: RECIPE_WRITE_INTERFACE_VERSION },
+    {
+      ...session,
+      tableId,
+      adaptedModel: 1,
+      interfaceVersion: RECIPE_WRITE_INTERFACE_VERSION,
+    },
+    { ...session, recipeId: tableId, adaptedModel: 1 },
+    { ...session, tableId, shareType: 1, adaptedModel: 1 },
+  ];
+
+  let lastInfo = "";
+  for (const endpoint of SHARE_CREATE_ENDPOINTS) {
+    for (const form of attempts) {
+      try {
+        const payload = (await cloudRequest(
+          BASE_URLS[region],
+          endpoint,
+          form,
+          opts.timeoutMs,
+        )) as Record<string, unknown>;
+        const link = extractShareLink(payload);
+        if (link) {
+          return { share_link: link, source: "created", endpoint };
+        }
+        if (payload?.info) lastInfo = String(payload.info);
+        if (payload?.result === "success") {
+          // Success without link — re-list created for shareRecipeLink.
+          const listed = await cloudRequest(
+            BASE_URLS[region],
+            ENDPOINTS.created,
+            { ...session, adaptedModel: 1 },
+            opts.timeoutMs,
+          );
+          for (const raw of collectRecipeRecords(listed)) {
+            const id = Number(raw.tableId ?? raw.table_id ?? raw.recipeId);
+            if (id !== tableId) continue;
+            const l = raw.shareRecipeLink ?? raw.share_link;
+            if (typeof l === "string" && l.startsWith("http")) {
+              return {
+                share_link: l,
+                source: "created",
+                endpoint,
+              };
+            }
+          }
+        }
+      } catch (e) {
+        lastInfo = e instanceof Error ? e.message : String(e);
+      }
+    }
+  }
+
+  throw new CloudError(
+    lastInfo
+      ? `Could not create share link: ${lastInfo}`
+      : "Could not create share link (no working App share endpoint returned a URL). Sync the recipe first, or share once from the official App.",
+  );
+}
+
+function extractShareLink(payload: Record<string, unknown>): string | null {
+  const direct = [
+    payload.shareRecipeLink,
+    payload.share_link,
+    payload.shareLink,
+    payload.link,
+    payload.url,
+  ];
+  for (const v of direct) {
+    if (typeof v === "string" && v.startsWith("http")) return v;
+  }
+  // Nested data / result objects
+  for (const key of ["data", "payload", "result", "recipeVo", "value"]) {
+    const nested = payload[key];
+    if (nested && typeof nested === "object") {
+      const link = extractShareLink(nested as Record<string, unknown>);
+      if (link) return link;
+    }
+  }
+  return null;
+}
+

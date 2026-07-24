@@ -27,11 +27,17 @@ There is **no one-tap sample brew** on Dashboard; always choose a recipe on the 
 
 | UI label | What it is |
 | --- | --- |
-| **官方 (official)** | From xBloom account sync of **host** coffee/tea (and product) APIs — real App-side catalog, not Skill seeds. |
-| **我的 (user)** | Account **created/shared** recipes from sync, plus anything you save/edit locally. |
+| **官方 (official)** | From xBloom account sync of **host** coffee/tea (and product) APIs — real App-side catalog. |
+| **分享 (shared)** | Account **shared** list, or imported via paste of `share-h5.xbloom.com/?id=…`. |
+| **我的 (user)** | Account **created** recipes from sync, plus anything you save/edit locally. |
 | **设计 (design)** | Candidates saved from the Design page. |
 
 There are **no** bundled fake “official” recipes. Empty catalog until you sync Settings → account.
+
+### Share links
+
+- **Import:** Recipes page → paste an App share URL → Import (uses public `RecipeDetail.html`, no login).
+- **Export / create:** On a recipe with cloud `tableId`, use **Create share link** (login; reuses existing `shareRecipeLink` when present, otherwise tries App share endpoints). **Copy share link** when already known.
 
 After a brew finishes, Dashboard shows a complete banner with **View history** and **Brew again**. History supports filter, export JSON/CSV, and re-brew.
 

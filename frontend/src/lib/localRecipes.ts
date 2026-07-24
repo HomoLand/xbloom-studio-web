@@ -16,8 +16,20 @@ import { defaultCoffeeRecipe, isCoffeeContent, recipeDisplayName } from "./recip
 
 const USER_KEY = "xbloom.userRecipes.v1";
 
-/** UI / storage provenance. ``cloud`` is legacy; migrated to official|user on read. */
-export type LocalRecipeSource = "official" | "user" | "design" | "cloud";
+/**
+ * UI / storage provenance.
+ * - official: App host catalog
+ * - shared: received via App share list or H5 import
+ * - user: account-created or local save
+ * - design: Design page
+ * - cloud: legacy (migrated on read)
+ */
+export type LocalRecipeSource =
+  | "official"
+  | "user"
+  | "design"
+  | "shared"
+  | "cloud";
 
 export type LocalRecipeEntry = {
   recipe_id: string;
@@ -30,8 +42,12 @@ export type LocalRecipeEntry = {
   /** Remote xBloom account tableId when synced from cloud. */
   table_id?: number | null;
   region?: string;
-  /** Sync target that produced this row: coffee | tea | created | … */
+  /** Sync target that produced this row: coffee | tea | created | shared | … */
   origin?: string;
+  /** App H5 share URL when known (shareRecipeLink). */
+  share_link?: string | null;
+  /** Display name of the sharer when imported from H5 / shared list. */
+  share_author?: string | null;
 };
 
 function nowIso(): string {
@@ -69,14 +85,16 @@ function writeUserRaw(entries: LocalRecipeEntry[]): void {
 export function classifyCloudRecipeSource(
   target: string,
   raw?: Record<string, unknown> | null,
-): "official" | "user" {
+): "official" | "user" | "shared" {
   const places = parseAppPlaces(raw);
   // App place bits from Android catalog (see core xbloom_catalog._origin).
-  if (places.includes(4) || places.includes(5)) return "user";
+  if (places.includes(5)) return "shared";
+  if (places.includes(4)) return "user";
   if (places.includes(6) || places.includes(2)) return "official";
 
   const t = (target || "").toLowerCase();
-  if (t === "created" || t === "shared") return "user";
+  if (t === "shared") return "shared";
+  if (t === "created") return "user";
   // Host coffee/tea, product, easy defaults → treat as xBloom-provided.
   if (
     t === "coffee" ||
@@ -131,6 +149,10 @@ function migrateEntry(entry: LocalRecipeEntry): LocalRecipeEntry | null {
     const next = classifyCloudRecipeSource(entry.origin || "", null);
     return { ...entry, source: next };
   }
+  // Old mapping put shared under "user" — restore when origin is known.
+  if (entry.source === "user" && entry.origin === "shared") {
+    return { ...entry, source: "shared" };
+  }
   return entry;
 }
 
@@ -143,7 +165,8 @@ function ensureMigratedStore(): LocalRecipeEntry[] {
     (u) =>
       u.recipe_id.startsWith("official:") ||
       u.recipe_id.startsWith("starter:") ||
-      u.source === "cloud",
+      u.source === "cloud" ||
+      (u.source === "user" && u.origin === "shared"),
   );
   if (needsWrite) {
     writeUserRaw(next);
@@ -244,6 +267,8 @@ export function saveUserRecipe(
     tableId?: number | null;
     region?: string;
     origin?: string;
+    shareLink?: string | null;
+    shareAuthor?: string | null;
   },
 ): LocalRecipeEntry {
   const name = recipeDisplayName(content);
@@ -278,6 +303,14 @@ export function saveUserRecipe(
       opts?.tableId !== undefined ? opts.tableId : (prev?.table_id ?? null),
     region: opts?.region ?? prev?.region,
     origin: opts?.origin ?? prev?.origin,
+    share_link:
+      opts?.shareLink !== undefined
+        ? opts.shareLink
+        : (prev?.share_link ?? null),
+    share_author:
+      opts?.shareAuthor !== undefined
+        ? opts.shareAuthor
+        : (prev?.share_author ?? null),
   };
   if (existingIdx >= 0) users[existingIdx] = entry;
   else users.unshift(entry);

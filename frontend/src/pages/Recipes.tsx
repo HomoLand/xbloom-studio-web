@@ -8,10 +8,12 @@ import {
   Cloud,
   CloudUpload,
   Download,
+  Link2,
   Pencil,
   Play,
   Plus,
   RefreshCw,
+  Share2,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -37,7 +39,10 @@ import {
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
-import { importCloudSyncTargets } from "../lib/cloudCatalog";
+import {
+  importCloudSyncTargets,
+  importShareLink,
+} from "../lib/cloudCatalog";
 import {
   deleteUserRecipe,
   getLocalRecipe,
@@ -63,6 +68,7 @@ import {
   CLOUD_DELETE_CONFIRM,
   CLOUD_WRITE_CONFIRM,
   CloudError,
+  createCloudShareLink,
   deleteCloudRecipe,
   fetchCloudBrewRecords,
   pushCloudRecipe,
@@ -87,6 +93,7 @@ export default function Recipes() {
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<"all" | "coffee" | "tea">("all");
   const [query, setQuery] = useState("");
+  const [shareInput, setShareInput] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadList = useCallback(() => {
@@ -292,6 +299,68 @@ export default function Recipes() {
       }
     });
 
+  const onImportShare = () =>
+    void runCloud("share-import", async () => {
+      const entry = await importShareLink(shareInput.trim());
+      setShareInput("");
+      setInfo(
+        t("share.importDone").replace("{name}", entry.name) +
+          (entry.share_author
+            ? ` · ${t("share.fromAuthor").replace("{author}", entry.share_author)}`
+            : ""),
+      );
+      loadList();
+      openDetail(entry.recipe_id);
+    });
+
+  const onCreateShare = () =>
+    void runCloud("share-create", async () => {
+      const creds = requireCreds();
+      const tableId = localEntry?.table_id;
+      if (!tableId) throw new CloudError(t("share.needTableId"));
+      const result = await createCloudShareLink({
+        email: creds.email,
+        password: creds.password,
+        region: creds.region,
+        tableId,
+        existingShareLink: localEntry?.share_link,
+      });
+      if (localEntry) {
+        saveUserRecipe(localEntry.content, {
+          recipeId: localEntry.recipe_id,
+          source: localEntry.source,
+          tableId: localEntry.table_id,
+          region: localEntry.region ?? creds.region,
+          origin: localEntry.origin,
+          shareLink: result.share_link,
+          shareAuthor: localEntry.share_author,
+        });
+        openDetail(localEntry.recipe_id);
+      }
+      try {
+        await navigator.clipboard.writeText(result.share_link);
+        setInfo(
+          t("share.createDoneCopied").replace("{link}", result.share_link),
+        );
+      } catch {
+        setInfo(t("share.createDone").replace("{link}", result.share_link));
+      }
+    });
+
+  const onCopyShare = async () => {
+    const link = localEntry?.share_link;
+    if (!link) {
+      setError(t("share.noLinkYet"));
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(link);
+      setInfo(t("share.copied"));
+    } catch {
+      setInfo(link);
+    }
+  };
+
   const onUpdateCloud = () =>
     void runCloud("update", async () => {
       const creds = requireCreds();
@@ -445,6 +514,29 @@ export default function Recipes() {
         <span className="text-xs text-ink-faint">{t("cloud.actionsUseSettings")}</span>
       </div>
 
+      <div className="mb-4 flex flex-col gap-2 rounded-2xl border border-line bg-surface-2 p-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Link2 className="h-4 w-4 shrink-0 text-ink-faint" aria-hidden />
+          <TextInput
+            className="min-w-0 flex-1"
+            value={shareInput}
+            onChange={(e) => setShareInput(e.target.value)}
+            placeholder={t("share.importPlaceholder")}
+            aria-label={t("share.importPlaceholder")}
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="brand"
+          disabled={cloudBusy != null || !shareInput.trim()}
+          onClick={onImportShare}
+        >
+          {cloudBusy === "share-import"
+            ? t("common.loading")
+            : t("share.import")}
+        </Button>
+      </div>
+
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <Segmented
           ariaLabel={t("recipes.filterKind")}
@@ -503,18 +595,20 @@ export default function Recipes() {
                           tone={
                             source === "official"
                               ? "blue"
-                              : source === "design"
-                                ? "green"
-                                : source === "cloud"
-                                  ? "amber"
+                              : source === "shared"
+                                ? "amber"
+                                : source === "design"
+                                  ? "green"
                                   : "neutral"
                           }
                         >
                           {source === "official"
                             ? t("recipes.official")
-                            : source === "design"
-                              ? t("recipes.design")
-                              : t("recipes.user")}
+                            : source === "shared"
+                              ? t("recipes.shared")
+                              : source === "design"
+                                ? t("recipes.design")
+                                : t("recipes.user")}
                         </StatusPill>
                       }
                     />
@@ -532,6 +626,30 @@ export default function Recipes() {
             </p>
           ) : (
             <div className="space-y-4 text-sm">
+              {localEntry?.share_author || localEntry?.share_link ? (
+                <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
+                  {localEntry.share_author ? (
+                    <div>
+                      {t("share.fromAuthor").replace(
+                        "{author}",
+                        localEntry.share_author,
+                      )}
+                    </div>
+                  ) : null}
+                  {localEntry.share_link ? (
+                    <div className="mt-0.5 break-all">
+                      <a
+                        href={localEntry.share_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-brand hover:underline"
+                      >
+                        {localEntry.share_link}
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="flex items-start gap-3">
                 <RecipeThumb
                   label={
@@ -658,6 +776,35 @@ export default function Recipes() {
                 >
                   <Download className="h-3.5 w-3.5" aria-hidden />
                   JSON
+                </Button>
+                {localEntry?.share_link ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void onCopyShare()}
+                  >
+                    <Share2 className="h-3.5 w-3.5" aria-hidden />
+                    {t("share.copyLink")}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={
+                    cloudBusy != null ||
+                    (!localEntry?.table_id && !localEntry?.share_link)
+                  }
+                  onClick={onCreateShare}
+                  title={
+                    !localEntry?.table_id
+                      ? t("share.needTableId")
+                      : t("share.createHint")
+                  }
+                >
+                  <Share2 className="h-3.5 w-3.5" aria-hidden />
+                  {cloudBusy === "share-create"
+                    ? t("common.loading")
+                    : t("share.create")}
                 </Button>
                 <Button
                   variant="secondary"

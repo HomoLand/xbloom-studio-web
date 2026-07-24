@@ -114,13 +114,17 @@ describe("classifyCloudRecipeSource", () => {
     assert.equal(classifyCloudRecipeSource("coffee"), "official");
     assert.equal(classifyCloudRecipeSource("tea"), "official");
     assert.equal(classifyCloudRecipeSource("created"), "user");
-    assert.equal(classifyCloudRecipeSource("shared"), "user");
+    assert.equal(classifyCloudRecipeSource("shared"), "shared");
   });
 
-  it("respects appPlaceList user bit", () => {
+  it("respects appPlaceList bits", () => {
     assert.equal(
       classifyCloudRecipeSource("coffee", { appPlaceList: [4] }),
       "user",
+    );
+    assert.equal(
+      classifyCloudRecipeSource("created", { appPlaceList: [5] }),
+      "shared",
     );
     assert.equal(
       classifyCloudRecipeSource("created", { appPlaceList: [6] }),
