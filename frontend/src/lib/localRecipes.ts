@@ -145,15 +145,29 @@ function migrateEntry(entry: LocalRecipeEntry): LocalRecipeEntry | null {
     return null;
   }
 
-  if (entry.source === "cloud") {
-    const next = classifyCloudRecipeSource(entry.origin || "", null);
-    return { ...entry, source: next };
+  let next: LocalRecipeEntry = entry;
+
+  if (next.source === "cloud") {
+    next = {
+      ...next,
+      source: classifyCloudRecipeSource(next.origin || "", null),
+    };
   }
   // Old mapping put shared under "user" — restore when origin is known.
-  if (entry.source === "user" && entry.origin === "shared") {
-    return { ...entry, source: "shared" };
+  if (next.source === "user" && next.origin === "shared") {
+    next = { ...next, source: "shared" };
   }
-  return entry;
+  // Share-link imports used to copy the *author's* tableId, which is not owned
+  // by this account. Clear it so update/delete cloud do not target strangers.
+  // (table_id is re-set only after the user uploads to their own account.)
+  if (
+    (next.source === "shared" || next.recipe_id.startsWith("share:")) &&
+    next.table_id != null &&
+    next.origin === "shared"
+  ) {
+    next = { ...next, table_id: null };
+  }
+  return next;
 }
 
 function ensureMigratedStore(): LocalRecipeEntry[] {
@@ -166,7 +180,10 @@ function ensureMigratedStore(): LocalRecipeEntry[] {
       u.recipe_id.startsWith("official:") ||
       u.recipe_id.startsWith("starter:") ||
       u.source === "cloud" ||
-      (u.source === "user" && u.origin === "shared"),
+      (u.source === "user" && u.origin === "shared") ||
+      ((u.source === "shared" || u.recipe_id.startsWith("share:")) &&
+        u.table_id != null &&
+        u.origin === "shared"),
   );
   if (needsWrite) {
     writeUserRaw(next);

@@ -346,14 +346,18 @@ export async function importShareLink(
       "Share detail returned no pour stages (empty pourList). Try the China/International region, or open the link in the official App once.",
     );
   }
+  // Stable local id may embed the *author's* table id for dedupe only.
+  // Never set table_id: that field means "owned on THIS account" and only
+  // gets filled after the user uploads / syncs their own cloud row.
+  const remoteHint = norm.table_id ?? detail.table_id;
   const recipeId =
-    norm.table_id != null
-      ? `share:${detail.region}:${norm.table_id}`
+    remoteHint != null
+      ? `share:${detail.region}:${remoteHint}`
       : `share:${detail.region}:${hashName(norm.name)}`;
   return saveUserRecipe(norm.content, {
     recipeId,
     source: "shared",
-    tableId: norm.table_id ?? detail.table_id ?? undefined,
+    tableId: null,
     region: detail.region,
     origin: "shared",
     shareLink: detail.share_link,

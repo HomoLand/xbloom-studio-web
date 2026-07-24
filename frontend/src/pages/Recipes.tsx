@@ -676,8 +676,10 @@ export default function Recipes() {
                   <div className="mt-1 text-xs text-ink-faint">
                     {detail.kind}
                     {localEntry?.table_id
-                      ? ` · tableId ${localEntry.table_id}`
-                      : ""}
+                      ? ` · ${t("recipes.onAccount")}`
+                      : localEntry?.source === "shared"
+                        ? ` · ${t("recipes.localOnly")}`
+                        : ""}
                   </div>
                 </div>
               </div>
@@ -815,26 +817,30 @@ export default function Recipes() {
                   <CloudUpload className="h-3.5 w-3.5" aria-hidden />
                   {cloudBusy === "push" ? t("common.loading") : t("cloud.push")}
                 </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={cloudBusy != null || !localEntry?.table_id}
-                  onClick={onUpdateCloud}
-                >
-                  {cloudBusy === "update"
-                    ? t("common.loading")
-                    : t("cloud.update")}
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={cloudBusy != null || !localEntry?.table_id}
-                  onClick={onDeleteCloud}
-                >
-                  {cloudBusy === "delete"
-                    ? t("common.loading")
-                    : t("cloud.delete")}
-                </Button>
+                {localEntry?.table_id ? (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={cloudBusy != null}
+                      onClick={onUpdateCloud}
+                    >
+                      {cloudBusy === "update"
+                        ? t("common.loading")
+                        : t("cloud.update")}
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={cloudBusy != null}
+                      onClick={onDeleteCloud}
+                    >
+                      {cloudBusy === "delete"
+                        ? t("common.loading")
+                        : t("cloud.delete")}
+                    </Button>
+                  </>
+                ) : null}
                 {localEntry && localEntry.source !== "official" ? (
                   <Button
                     variant="secondary"
