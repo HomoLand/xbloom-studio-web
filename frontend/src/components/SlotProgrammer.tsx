@@ -12,7 +12,15 @@ import {
 } from "../lib/localRecipes";
 import { isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
 import { useMachine } from "../machine/MachineContext";
-import { Alert, Button, Field, Panel, Select } from "./ui";
+import { Alert, Button, Field, Panel, Select, StatusPill } from "./ui";
+
+type Phase =
+  | "idle"
+  | "connect"
+  | "pro"
+  | "write"
+  | "done"
+  | "error";
 
 function coffeeEntries(): LocalRecipeEntry[] {
   return listAllLocalRecipes().filter((e) => isCoffeeContent(e.content));
@@ -31,6 +39,7 @@ export function SlotProgrammer() {
   const [slotB, setSlotB] = useState(firstId);
   const [slotC, setSlotC] = useState(firstId);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -39,24 +48,47 @@ export function SlotProgrammer() {
     return asCoffee(entry?.content);
   };
 
+  const phaseLabel = (p: Phase): string => {
+    switch (p) {
+      case "connect":
+        return t("slots.phaseConnect");
+      case "pro":
+        return t("slots.phasePro");
+      case "write":
+        return t("slots.phaseWrite");
+      case "done":
+        return t("slots.phaseDone");
+      case "error":
+        return t("slots.phaseError");
+      default:
+        return t("slots.phaseIdle");
+    }
+  };
+
   const write = async () => {
     setError(null);
     setInfo(null);
+    setPhase("idle");
     const a = pick(slotA);
     const b = pick(slotB);
     const c = pick(slotC);
     if (!a || !b || !c) {
       setError(t("slots.needThree"));
+      setPhase("error");
       return;
     }
-    if (Number((a as { bypass_ml?: number }).bypass_ml || 0) > 0 ||
-        Number((b as { bypass_ml?: number }).bypass_ml || 0) > 0 ||
-        Number((c as { bypass_ml?: number }).bypass_ml || 0) > 0) {
+    if (
+      Number((a as { bypass_ml?: number }).bypass_ml || 0) > 0 ||
+      Number((b as { bypass_ml?: number }).bypass_ml || 0) > 0 ||
+      Number((c as { bypass_ml?: number }).bypass_ml || 0) > 0
+    ) {
       setError(t("slots.noBypass"));
+      setPhase("error");
       return;
     }
     if (driver !== "web-bluetooth") {
       setError(t("recipes.needWebBle"));
+      setPhase("error");
       return;
     }
     setBusy(true);
@@ -66,9 +98,14 @@ export function SlotProgrammer() {
         bleSnapshot.phase === "disconnected" ||
         bleSnapshot.phase === "error"
       ) {
+        setPhase("connect");
         await connectBle();
       }
+      setPhase("pro");
+      // saveSlots sends PRO mode then A/B/C frames
+      setPhase("write");
       await bleSession.saveSlots([a, b, c]);
+      setPhase("done");
       setInfo(
         t("slots.saved")
           .replace("{a}", recipeDisplayName(a))
@@ -76,7 +113,13 @@ export function SlotProgrammer() {
           .replace("{c}", recipeDisplayName(c)),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(
+        /retry|0x43|hang|timeout|not connected|disconnect/i.test(msg)
+          ? `${msg} — ${t("slots.failHint")}`
+          : msg,
+      );
     } finally {
       setBusy(false);
     }
@@ -100,6 +143,32 @@ export function SlotProgrammer() {
   return (
     <Panel title={t("slots.title")} className="mt-4">
       <p className="mb-3 text-xs text-ink-muted">{t("slots.hint")}</p>
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <StatusPill
+          tone={
+            phase === "done"
+              ? "green"
+              : phase === "error"
+                ? "red"
+                : phase === "idle"
+                  ? "neutral"
+                  : "amber"
+          }
+        >
+          {phaseLabel(phase)}
+        </StatusPill>
+        {driver !== "web-bluetooth" ? (
+          <StatusPill tone="amber">{t("recipes.needWebBle")}</StatusPill>
+        ) : null}
+        {bleSnapshot.phase !== "idle" && bleSnapshot.phase !== "disconnected" ? (
+          <StatusPill tone="blue">
+            BLE {bleSnapshot.phase}
+            {bleSnapshot.machineStateName
+              ? ` · ${bleSnapshot.machineStateName}`
+              : ""}
+          </StatusPill>
+        ) : null}
+      </div>
       {error ? (
         <Alert tone="red" className="mb-3">
           {error}
@@ -127,7 +196,7 @@ export function SlotProgrammer() {
           </Select>
         </Field>
       </div>
-      <div className="mt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="primary"
@@ -135,8 +204,9 @@ export function SlotProgrammer() {
           onClick={() => void write()}
         >
           <Save className="h-3.5 w-3.5" aria-hidden />
-          {busy ? t("common.loading") : t("slots.write")}
+          {busy ? t("slots.writing") : t("slots.write")}
         </Button>
+        <span className="text-[11px] text-ink-faint">{t("slots.proNote")}</span>
       </div>
     </Panel>
   );

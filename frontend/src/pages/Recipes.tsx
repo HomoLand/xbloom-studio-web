@@ -2,7 +2,7 @@
  * Recipe browser — local-first; optional official account cloud sync.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Cloud,
@@ -30,8 +30,10 @@ import {
   PageHeader,
   Panel,
   RecipeThumb,
+  Segmented,
   Spinner,
   StatusPill,
+  TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
@@ -45,7 +47,11 @@ import {
   toRecipeRecord,
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
-import { isCoffeeContent, isTeaContent } from "../lib/recipeDomain";
+import {
+  isCoffeeContent,
+  isTeaContent,
+  recipeDisplayName,
+} from "../lib/recipeDomain";
 import {
   downloadText,
   exportRecipesJson,
@@ -79,6 +85,8 @@ export default function Recipes() {
   const [localEntry, setLocalEntry] = useState<LocalRecipeEntry | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<"all" | "coffee" | "tea">("all");
+  const [query, setQuery] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadList = useCallback(() => {
@@ -124,6 +132,31 @@ export default function Recipes() {
     driver === "web-bluetooth" &&
     content != null &&
     (isCoffeeContent(content) || isTeaContent(content));
+
+  const filteredRecipes = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return recipes.filter((r) => {
+      const c =
+        (r.latest_revision?.content as RecipeContent | undefined) ??
+        getLocalRecipe(r.recipe_id)?.content;
+      if (kindFilter === "tea") {
+        if (!c || !isTeaContent(c)) return false;
+      } else if (kindFilter === "coffee") {
+        if (!c || !isCoffeeContent(c)) return false;
+      }
+      if (!q) return true;
+      const name = (r.name || (c ? recipeDisplayName(c) : "")).toLowerCase();
+      const id = r.recipe_id.toLowerCase();
+      const kind = String(r.kind || "").toLowerCase();
+      const note =
+        c && isCoffeeContent(c) && c.note
+          ? String(c.note).toLowerCase()
+          : "";
+      return (
+        name.includes(q) || id.includes(q) || kind.includes(q) || note.includes(q)
+      );
+    });
+  }, [recipes, kindFilter, query]);
 
   const requireCreds = () => {
     const creds = getAccountCredentials();
@@ -412,15 +445,47 @@ export default function Recipes() {
         <span className="text-xs text-ink-faint">{t("cloud.actionsUseSettings")}</span>
       </div>
 
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Segmented
+          ariaLabel={t("recipes.filterKind")}
+          value={kindFilter}
+          onChange={setKindFilter}
+          options={[
+            { value: "all", label: t("recipes.filterAll") },
+            { value: "coffee", label: t("recipes.filterCoffee") },
+            { value: "tea", label: t("recipes.filterTea") },
+          ]}
+        />
+        <TextInput
+          className="sm:max-w-xs"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("recipes.searchPlaceholder")}
+          aria-label={t("recipes.searchPlaceholder")}
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <Panel title={t("recipes.title")}>
+        <Panel
+          title={`${t("recipes.title")}${
+            filteredRecipes.length !== recipes.length
+              ? ` (${filteredRecipes.length}/${recipes.length})`
+              : ""
+          }`}
+        >
           {loading ? (
             <Spinner label={t("common.loading")} />
           ) : recipes.length === 0 ? (
             <EmptyState title={t("recipes.empty")} showMachine={false} />
+          ) : filteredRecipes.length === 0 ? (
+            <EmptyState
+              title={t("recipes.filterEmpty")}
+              description={t("recipes.filterEmptyHint")}
+              showMachine={false}
+            />
           ) : (
             <ul className="space-y-1">
-              {recipes.map((r, idx) => {
+              {filteredRecipes.map((r, idx) => {
                 const active = r.recipe_id === selectedId;
                 const source = String(r.source ?? "");
                 const c = (r.latest_revision?.content ??

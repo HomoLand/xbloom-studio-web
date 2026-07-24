@@ -4,24 +4,35 @@
 
 ## GitHub Pages (static Web Bluetooth)
 
-Live SPA (Chrome + Web Bluetooth, no local backend):
+Live SPA (Chrome + Web Bluetooth, no local backend required for brew/recipes/history):
 
 **https://homoland.github.io/xbloom-studio-web/**
 
-- Deployed by `.github/workflows/pages.yml` on push to `master` / `main` / `codex/roadmap-completion`.
+- Deployed by `.github/workflows/pages.yml` on push to `master` / `main`.
 - Build flags: `VITE_STATIC=1`, `VITE_BASE=/xbloom-studio-web/`.
-- Use **Dashboard → Connect Studio / Brew sample coffee**. Catalog design/history still need a local backend.
+- PWA: optional install via site manifest + service worker (offline shell only).
 
-## Machine drivers (progressive)
+### How to use (Chrome)
+
+1. **Close the official xBloom App** (only one BLE client).
+2. Open the Pages URL in **Chrome** (HTTPS / secure context).
+3. **Dashboard → Connect Studio** (first time: browser device picker).
+4. **Recipes** → pick coffee or tea (filter/search) → **Brew** → type the safety phrase:
+   - Coffee: `cup-filter-water-beans`
+   - Tea: `tea-brewer-water-cup-clear`
+5. Optional: **Settings** → save account session (password is tab-only) → sync catalog / brew history; configure AI for Design.
+6. Optional: Recipes bottom **A/B/C slots** — choose three coffee recipes and write Easy-Mode presets (PRO batch).
+
+There is **no one-tap sample brew** on Dashboard; always choose a recipe on the Recipes page.
+
+### Machine drivers (progressive)
 
 | Driver | How control works | Status |
 | --- | --- | --- |
-| **web-bluetooth** | Browser → Chrome Web Bluetooth → BLE | **Default when usable** (Chrome + secure context). Coffee load/start/cancel + live status. |
-| **bridge** | Browser → local HTTP API → `xbloom-bridge` → BLE | Legacy / advanced; always selectable. Required for tea and full multi-workflow bridge features. |
+| **web-bluetooth** | Browser → Chrome Web Bluetooth → BLE | **Default when usable**. Coffee + tea load/start, pause/resume (coffee), cancel, live telemetry, FreeSolo tools, A/B/C slots. |
+| **bridge** | Browser → local HTTP API → `xbloom-bridge` → BLE | Advanced / LAN; requires running host backend. |
 
-Preference is stored in `localStorage` (`xbloom.machineDriver`). Protocol framing, load builders, and notify decode live under `frontend/src/ble/` with golden vectors against brew `packages/core/xbloom_ble`. Design doc: brew `docs/ADR-WEB-BLUETOOTH.md` (W0–W4).
-
-Safety: Web Bluetooth start still requires typing `cup-filter-water-beans` (coffee) before load+start. Close the official App while using Web Bluetooth.
+Preference: `localStorage` key `xbloom.machineDriver`. Protocol under `frontend/src/ble/` (goldens vs brew `packages/core/xbloom_ble`). ADR: brew `docs/ADR-WEB-BLUETOOTH.md`.
 
 ## 架构
 

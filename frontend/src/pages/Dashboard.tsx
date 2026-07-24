@@ -563,7 +563,9 @@ export default function Dashboard() {
         try {
           await bleSession.pauseBrew();
         } catch (e) {
-          setActionError(e instanceof Error ? e.message : String(e));
+          const msg = e instanceof Error ? e.message : String(e);
+          setActionError(msg);
+          setActionGuidance(t("dashboard.pauseHint"));
         } finally {
           if (!stopPollsRef.current) setActionBusy(null);
         }
@@ -574,7 +576,9 @@ export default function Dashboard() {
         try {
           await bleSession.resumeBrew();
         } catch (e) {
-          setActionError(e instanceof Error ? e.message : String(e));
+          const msg = e instanceof Error ? e.message : String(e);
+          setActionError(msg);
+          setActionGuidance(t("dashboard.resumeHint"));
         } finally {
           if (!stopPollsRef.current) setActionBusy(null);
         }
@@ -669,6 +673,7 @@ export default function Dashboard() {
       pollEvents,
       pollStatus,
       stored?.workflowId,
+      t,
       webBle,
     ],
   );
@@ -988,6 +993,13 @@ export default function Dashboard() {
                 </Button>
               ) : null}
             </div>
+            {webBleCanPause || webBleCanResume ? (
+              <p className="text-[11px] leading-relaxed text-ink-faint">
+                {webBleCanResume
+                  ? t("dashboard.pauseStateNote")
+                  : t("dashboard.pauseWhileRunningNote")}
+              </p>
+            ) : null}
             {staticDeploy ? (
               <p className="text-xs text-ink-muted">{t("dashboard.staticHint")}</p>
             ) : null}

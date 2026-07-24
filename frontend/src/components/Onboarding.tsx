@@ -4,11 +4,11 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bluetooth, Coffee, Sparkles, X } from "lucide-react";
+import { Bluetooth, BookOpen, Coffee, Settings, X } from "lucide-react";
 import { Button } from "./ui";
 import { useI18n } from "../i18n/I18nContext";
 
-const KEY = "xbloom.onboarding.v1.done";
+const KEY = "xbloom.onboarding.v2.done";
 
 export function Onboarding() {
   const { t } = useI18n();
@@ -16,7 +16,13 @@ export function Onboarding() {
 
   useEffect(() => {
     try {
-      if (localStorage.getItem(KEY) !== "1") setOpen(true);
+      // Migrate: v1 done still counts as seen for less annoyance
+      if (
+        localStorage.getItem(KEY) !== "1" &&
+        localStorage.getItem("xbloom.onboarding.v1.done") !== "1"
+      ) {
+        setOpen(true);
+      }
     } catch {
       /* ignore */
     }
@@ -25,6 +31,7 @@ export function Onboarding() {
   const dismiss = () => {
     try {
       localStorage.setItem(KEY, "1");
+      localStorage.setItem("xbloom.onboarding.v1.done", "1");
     } catch {
       /* ignore */
     }
@@ -82,7 +89,7 @@ export function Onboarding() {
             </div>
           </li>
           <li className="flex gap-3 rounded-xl bg-surface-2 p-3">
-            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+            <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
             <div>
               <div className="font-medium text-ink">{t("onboarding.step3")}</div>
               <p className="mt-0.5 text-xs text-ink-muted">
@@ -90,9 +97,25 @@ export function Onboarding() {
               </p>
             </div>
           </li>
+          <li className="flex gap-3 rounded-xl bg-surface-2 p-3">
+            <Settings className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+            <div>
+              <div className="font-medium text-ink">{t("onboarding.step4")}</div>
+              <p className="mt-0.5 text-xs text-ink-muted">
+                {t("onboarding.step4hint")}
+              </p>
+            </div>
+          </li>
         </ol>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="primary" size="sm" onClick={dismiss}>
+          <Link
+            to="/recipes"
+            onClick={dismiss}
+            className="inline-flex h-8 items-center rounded-full bg-ink px-3 text-xs font-medium text-paper hover:bg-white/90"
+          >
+            {t("onboarding.goRecipes")}
+          </Link>
+          <Button variant="secondary" size="sm" onClick={dismiss}>
             {t("onboarding.start")}
           </Button>
           <Link
