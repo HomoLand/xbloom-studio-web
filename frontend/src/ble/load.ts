@@ -15,6 +15,18 @@ export const NO_GRIND = 0;
 export const NO_GRIND_WIRE = 0xfe;
 export const POURS_CMD_GRIND = 0x41;
 export const POURS_CMD_NO_GRIND = 0x44;
+/**
+ * Coffee path command-8104 (APP_SET_CUP) fixed pair used for Studio Omni loads.
+ *
+ * Evidence (APK 2.2.2 matrix + hardware goldens): capture-compatible ``110/90``
+ * succeeds on known Studio firmware. App tables also document ``80/40`` (xPod)
+ * and ``90/40`` (Omni/Other) for some paths — those are **not** swapped in here
+ * until a controlled A/B on the target firmware. Do not expose as recipe
+ * temperatures; not a user-tunable pour field.
+ *
+ * See docs/XBLOOM-REVERSE-AUDIT.md § protocol uncertainties and
+ * skills/.../apk-capability-matrix.md § Important protocol uncertainties.
+ */
 export const COFFEE_CUP_GEOMETRY_COMPAT: [number, number] = [110.0, 90.0];
 
 export const VIBRATION_CODES: Record<string, number> = {

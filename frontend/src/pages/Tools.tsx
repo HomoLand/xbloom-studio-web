@@ -39,6 +39,9 @@ export default function Tools() {
   const [tempC, setTempC] = useState(90);
   const [flowMlS, setFlowMlS] = useState(3.5);
   const [pattern, setPattern] = useState("center");
+  // Advanced mechanical (D/T; physical effect not guaranteed)
+  const [pourRadius, setPourRadius] = useState(720);
+  const [vibration, setVibration] = useState(1300);
 
   const weightG =
     bleSnapshot.scaleG != null
@@ -341,8 +344,104 @@ export default function Tools() {
               {btnLabel("water-quit", t("tools.quit"))}
             </Button>
           </div>
+          <p className="mb-2 mt-3 text-xs text-ink-faint">
+            {t("tools.liveHint")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("water-pattern", () =>
+                  bleSession.waterSetPattern(pattern),
+                )
+              }
+            >
+              {btnLabel("water-pattern", t("tools.applyPattern"))}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("water-temp", () =>
+                  bleSession.waterSetTemperature(tempC),
+                )
+              }
+            >
+              {btnLabel("water-temp", t("tools.applyTemp"))}
+            </Button>
+          </div>
         </Panel>
       </div>
+
+      <Panel title={t("tools.advanced")} className="mt-4">
+        <p className="mb-3 text-xs text-ink-muted">{t("tools.advancedHint")}</p>
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:max-w-md">
+          <Field label={t("tools.pourRadius")}>
+            <TextInput
+              type="number"
+              value={String(pourRadius)}
+              onChange={(e) => setPourRadius(Number(e.target.value) || 0)}
+            />
+          </Field>
+          <Field label={t("tools.vibration")}>
+            <TextInput
+              type="number"
+              step={100}
+              value={String(vibration)}
+              onChange={(e) => setVibration(Number(e.target.value) || 0)}
+            />
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy != null}
+            onClick={() =>
+              void run("radius-read", () => bleSession.readPourRadius())
+            }
+          >
+            {btnLabel("radius-read", t("tools.readRadius"))}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={busy != null}
+            onClick={() =>
+              void run("radius-write", () =>
+                bleSession.writePourRadius(pourRadius),
+              )
+            }
+          >
+            {btnLabel("radius-write", t("tools.writeRadius"))}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy != null}
+            onClick={() =>
+              void run("vib-read", () => bleSession.readVibrationAmplitude())
+            }
+          >
+            {btnLabel("vib-read", t("tools.readVibration"))}
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={busy != null}
+            onClick={() =>
+              void run("vib-write", () =>
+                bleSession.writeVibrationAmplitude(vibration),
+              )
+            }
+          >
+            {btnLabel("vib-write", t("tools.writeVibration"))}
+          </Button>
+        </div>
+      </Panel>
     </div>
   );
 }

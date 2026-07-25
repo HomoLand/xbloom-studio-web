@@ -25,6 +25,12 @@ export const CMD_SET_WEIGHT_UNIT = 8005;
 export const CMD_SET_TEMPERATURE_UNIT = 8010;
 export const CMD_SET_WATER_SOURCE = 4508;
 export const CMD_SET_DISPLAY = 8103;
+export const CMD_BREWER_SET_PATTERN = 8016;
+export const CMD_BREWER_SET_TEMPERATURE = 4510;
+export const CMD_READ_POUR_RADIUS = 11506;
+export const CMD_WRITE_POUR_RADIUS = 11507;
+export const CMD_READ_VIBRATION_AMPLITUDE = 11508;
+export const CMD_WRITE_VIBRATION_AMPLITUDE = 11509;
 
 function floatBits(value: number): number {
   const buf = new ArrayBuffer(4);
@@ -134,4 +140,50 @@ export function buildSetWaterSource(source: WaterSource): Uint8Array {
 export function buildSetDisplay(level: DisplayLevel): Uint8Array {
   const values: Record<DisplayLevel, number> = { low: 1, medium: 8, high: 15 };
   return j15Frame(CMD_SET_DISPLAY, { data: [values[level]] });
+}
+
+/** Live FreeSolo water pattern change (running dispense). */
+export function buildBrewerSetPattern(pattern: string): Uint8Array {
+  return j15Frame(CMD_BREWER_SET_PATTERN, {
+    data: [machinePattern(pattern)],
+  });
+}
+
+/**
+ * Live FreeSolo water temperature target (tenths °C as plain int).
+ * RT = 20; heated 40–98.
+ */
+export function buildBrewerSetTemperature(tempC: number): Uint8Array {
+  const t = Math.trunc(tempC);
+  if (t !== 20 && (t < 40 || t > 98)) {
+    throw new Error("temperature must be RT (20) or 40-98 C");
+  }
+  return j15Frame(CMD_BREWER_SET_TEMPERATURE, { data: [t * 10] });
+}
+
+export function buildReadPourRadius(): Uint8Array {
+  return j15Frame(CMD_READ_POUR_RADIUS, { frameType: 0x02 });
+}
+
+export function buildWritePourRadius(value: number): Uint8Array {
+  const v = Math.trunc(value);
+  if (v < 400 || v > 1000) {
+    throw new Error("pour radius must be 400-1000");
+  }
+  return j15Frame(CMD_WRITE_POUR_RADIUS, { data: [v], frameType: 0x02 });
+}
+
+export function buildReadVibrationAmplitude(): Uint8Array {
+  return j15Frame(CMD_READ_VIBRATION_AMPLITUDE, { frameType: 0x02 });
+}
+
+export function buildWriteVibrationAmplitude(value: number): Uint8Array {
+  const v = Math.trunc(value);
+  if (v < 1000 || v > 1500 || v % 100 !== 0) {
+    throw new Error("vibration amplitude must be 1000-1500 in 100-unit steps");
+  }
+  return j15Frame(CMD_WRITE_VIBRATION_AMPLITUDE, {
+    data: [v],
+    frameType: 0x02,
+  });
 }

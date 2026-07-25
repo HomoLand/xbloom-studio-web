@@ -20,10 +20,16 @@ import {
   buildScaleEnter,
   buildScaleExit,
   buildScaleTare,
+  buildBrewerSetPattern,
+  buildBrewerSetTemperature,
+  buildReadPourRadius,
+  buildReadVibrationAmplitude,
   buildSetDisplay,
   buildSetTemperatureUnit,
   buildSetWaterSource,
   buildSetWeightUnit,
+  buildWritePourRadius,
+  buildWriteVibrationAmplitude,
 } from "./extras.ts";
 
 describe("extras frames match core protocol goldens", () => {
@@ -73,6 +79,31 @@ describe("extras frames match core protocol goldens", () => {
     assert.equal(
       bytesToHex(buildSetDisplay("high")),
       "580101a71f10000000010f000000f313",
+    );
+  });
+  it("live FreeSolo pattern/temp", () => {
+    assert.equal(
+      bytesToHex(buildBrewerSetPattern("spiral")),
+      "580101501f1000000001020000004bf4",
+    );
+    assert.equal(
+      bytesToHex(buildBrewerSetTemperature(92)),
+      "5801019e1110000000019803000076be",
+    );
+  });
+  it("advanced pour radius / vibration", () => {
+    assert.equal(bytesToHex(buildReadPourRadius()), "580102f22c0c0000000155de");
+    assert.equal(
+      bytesToHex(buildWritePourRadius(720)),
+      "580102f32c1000000001d0020000bf83",
+    );
+    assert.equal(
+      bytesToHex(buildReadVibrationAmplitude()),
+      "580102f42c0c000000019886",
+    );
+    assert.equal(
+      bytesToHex(buildWriteVibrationAmplitude(1300)),
+      "580102f52c100000000114050000f8b3",
     );
   });
 });

@@ -145,10 +145,13 @@ export default function Recipes() {
   }, [searchParams, openDetail]);
 
   const content: RecipeContent | null = latest?.content ?? null;
-  const canBrewWebBle =
-    driver === "web-bluetooth" &&
+  const canBrewContent =
     content != null &&
     (isCoffeeContent(content) || isTeaContent(content));
+  /** Web Bluetooth near-field or Bridge daemon (load via host SQLite revision). */
+  const canBrew =
+    canBrewContent &&
+    (driver === "web-bluetooth" || driver === "bridge");
 
   const filteredRecipes = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -770,7 +773,7 @@ export default function Recipes() {
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!canBrewWebBle}
+                  disabled={!canBrew}
                   onClick={() =>
                     setBrewTarget({
                       recipeRevisionId: latest.revision_id,
@@ -781,6 +784,7 @@ export default function Recipes() {
                 >
                   <Play className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.brew")}
+                  {driver === "bridge" ? ` · Bridge` : ""}
                 </Button>
                 <Link
                   to={`/recipes/edit?id=${encodeURIComponent(detail.recipe_id)}`}
@@ -878,11 +882,14 @@ export default function Recipes() {
                     {t("recipes.deleteLocal")}
                   </Button>
                 ) : null}
-                {!canBrewWebBle && driver !== "web-bluetooth" ? (
+                {!canBrew && !canBrewContent ? (
                   <span className="text-xs text-ink-muted">
-                    {driver === "bridge"
-                      ? t("recipes.useBridgeDashboard")
-                      : t("recipes.needWebBle")}
+                    {t("recipes.needBrewable")}
+                  </span>
+                ) : null}
+                {canBrew && driver === "bridge" ? (
+                  <span className="text-xs text-ink-faint">
+                    {t("recipes.bridgeBrewHint")}
                   </span>
                 ) : null}
                 {isCoffeeContent(content) && content.kind === "flash-brew" ? (

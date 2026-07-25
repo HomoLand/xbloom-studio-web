@@ -268,7 +268,19 @@ export const messages: Record<Locale, Record<string, string>> = {
     "tools.liveWeight": "实时重量",
     "tools.lastAction": "最近动作",
     "tools.bridgeModeHint":
-      "当前为 Bridge 驱动：冲煮请用控制台/Dashboard。本页 FreeSolo 需 Web 蓝牙。",
+      "当前为 Bridge 驱动：冲煮可在配方页用 Bridge；本页 FreeSolo 仍需 Web 蓝牙。",
+    "tools.liveHint": "出水过程中可改路径/目标温度（需已进入出水模式）。",
+    "tools.applyPattern": "应用路径",
+    "tools.applyTemp": "应用温度",
+    "tools.advanced": "机械调参",
+    "tools.advancedHint":
+      "注水半径 400–1000；振动幅度 1000–1500（步进 100）。协议级读写，物理效果未做独立计量。",
+    "tools.pourRadius": "注水半径",
+    "tools.vibration": "振动幅度",
+    "tools.readRadius": "读半径",
+    "tools.writeRadius": "写半径",
+    "tools.readVibration": "读振动",
+    "tools.writeVibration": "写振动",
 
     "cloud.title": "官方账号配方",
     "cloud.hint":
@@ -366,6 +378,9 @@ export const messages: Record<Locale, Record<string, string>> = {
     "settings.bridgeOffline": "离线 / 不可达",
     "recipes.useBridgeDashboard":
       "当前为 Bridge 驱动：请到控制台（Dashboard）通过本机守护进程冲煮。",
+    "recipes.bridgeBrewHint":
+      "Bridge：将先把配方写入本机 SQLite，再经守护进程加载/启动；进度看控制台。",
+    "recipes.needBrewable": "请选择可冲煮的咖啡或茶配方。",
     "settings.ai": "AI 模型（多模态）",
     "settings.aiHint":
       "OpenAI 兼容接口。密钥仅保存在本浏览器 localStorage，清除站点数据会丢失。接口需允许浏览器 CORS（可用本地反代）。",
@@ -798,7 +813,19 @@ export const messages: Record<Locale, Record<string, string>> = {
     "tools.liveWeight": "Live weight",
     "tools.lastAction": "Last action",
     "tools.bridgeModeHint":
-      "Bridge driver active: brew from Dashboard. FreeSolo on this page needs Web Bluetooth.",
+      "Bridge driver active: brew from Recipes via Bridge; FreeSolo here still needs Web Bluetooth.",
+    "tools.liveHint": "While dispensing, apply pattern/temperature live (must be in water mode).",
+    "tools.applyPattern": "Apply pattern",
+    "tools.applyTemp": "Apply temperature",
+    "tools.advanced": "Mechanical tuning",
+    "tools.advancedHint":
+      "Pour radius 400–1000; vibration 1000–1500 (step 100). Protocol R/W only — not P-measured.",
+    "tools.pourRadius": "Pour radius",
+    "tools.vibration": "Vibration amplitude",
+    "tools.readRadius": "Read radius",
+    "tools.writeRadius": "Write radius",
+    "tools.readVibration": "Read vibration",
+    "tools.writeVibration": "Write vibration",
 
     "cloud.title": "Official account recipes",
     "cloud.hint":
@@ -897,6 +924,9 @@ export const messages: Record<Locale, Record<string, string>> = {
     "settings.bridgeOffline": "Offline / unreachable",
     "recipes.useBridgeDashboard":
       "Bridge driver active: brew from Dashboard via the local daemon.",
+    "recipes.bridgeBrewHint":
+      "Bridge: recipe is saved to host SQLite then load/start via daemon; watch Dashboard.",
+    "recipes.needBrewable": "Select a brewable coffee or tea recipe.",
     "settings.ai": "AI model (multimodal)",
     "settings.aiHint":
       "OpenAI-compatible API. Keys stay in this browser’s localStorage until site data is cleared. The endpoint must allow browser CORS (use a local reverse proxy if needed).",

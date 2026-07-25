@@ -156,6 +156,43 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
     }
   };
 
+  /**
+   * Browser-local synthetic ids (localStorage recipes) are not in host SQLite.
+   * Bridge load only accepts durable revision ids — upsert content first.
+   */
+  const ensureBridgeRevisionId = async (): Promise<string> => {
+    const rev = target?.recipeRevisionId?.trim() || "";
+    const looksLocal =
+      !rev ||
+      rev.endsWith(":rev1") ||
+      rev.startsWith("user:") ||
+      rev.startsWith("share:") ||
+      rev.startsWith("cloud:") ||
+      rev.startsWith("local:") ||
+      rev.startsWith("official:") ||
+      rev.startsWith("starter:");
+    if (!looksLocal) return rev;
+    if (!content) throw new Error(t("brew.noTarget"));
+    const created = await api.createRecipe({
+      content,
+      name: name,
+      provenance: {
+        source: "web-local-bridge-brew",
+        local_recipe_id:
+          rev.replace(/:rev1$/, "") || target?.recipeRevisionId || null,
+      },
+    });
+    const id =
+      created.revision?.revision_id ||
+      created.recipe?.latest_revision?.revision_id;
+    if (!id || typeof id !== "string") {
+      throw new Error(
+        "Bridge brew: host did not return a recipe revision_id after create.",
+      );
+    }
+    return id;
+  };
+
   const brew = async () => {
     if (!target) return;
     if (webBle) {
@@ -178,8 +215,9 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       // Fresh request_id for this explicit user mutation (no auto transport retry).
       const loadRequestId = newRequestId("load");
       try {
+        const revisionId = await ensureBridgeRevisionId();
         const loadBody = {
-          recipe_revision_id: target.recipeRevisionId,
+          recipe_revision_id: revisionId,
           request_id: loadRequestId,
         };
         const result =

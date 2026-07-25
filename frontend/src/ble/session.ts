@@ -26,6 +26,8 @@ import {
   buildBrewerPause,
   buildBrewerQuit,
   buildBrewerResume,
+  buildBrewerSetPattern,
+  buildBrewerSetTemperature,
   buildBrewerStart,
   buildBrewerStop,
   buildGrinderEnter,
@@ -34,6 +36,8 @@ import {
   buildGrinderResume,
   buildGrinderStart,
   buildGrinderStop,
+  buildReadPourRadius,
+  buildReadVibrationAmplitude,
   buildScaleEnter,
   buildScaleExit,
   buildScaleTare,
@@ -41,6 +45,8 @@ import {
   buildSetTemperatureUnit,
   buildSetWaterSource,
   buildSetWeightUnit,
+  buildWritePourRadius,
+  buildWriteVibrationAmplitude,
   type DisplayLevel,
   type TemperatureUnit,
   type WaterSource,
@@ -1196,6 +1202,25 @@ export class WebBleSession {
   }
   async waterQuit(): Promise<void> {
     await this.requireWrite(buildBrewerQuit());
+  }
+  async waterSetPattern(pattern: string): Promise<void> {
+    await this.requireWrite(buildBrewerSetPattern(pattern));
+  }
+  async waterSetTemperature(tempC: number): Promise<void> {
+    await this.requireWrite(buildBrewerSetTemperature(tempC));
+  }
+
+  async readPourRadius(): Promise<void> {
+    await this.requireWrite(buildReadPourRadius());
+  }
+  async writePourRadius(value: number): Promise<void> {
+    await this.requireWrite(buildWritePourRadius(value));
+  }
+  async readVibrationAmplitude(): Promise<void> {
+    await this.requireWrite(buildReadVibrationAmplitude());
+  }
+  async writeVibrationAmplitude(value: number): Promise<void> {
+    await this.requireWrite(buildWriteVibrationAmplitude(value));
   }
 
   /**
