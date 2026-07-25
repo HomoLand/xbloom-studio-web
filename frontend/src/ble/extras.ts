@@ -13,10 +13,18 @@ export const CMD_GRINDER_ENTER = 8006;
 export const CMD_GRINDER_START = 3500;
 export const CMD_GRINDER_STOP = 3505;
 export const CMD_GRINDER_QUIT = 8012;
+export const CMD_GRINDER_PAUSE = 8018;
+export const CMD_GRINDER_RESUME = 8020;
 export const CMD_BREWER_ENTER = 8007;
 export const CMD_BREWER_START = 4506;
 export const CMD_BREWER_STOP = 4507;
 export const CMD_BREWER_QUIT = 8013;
+export const CMD_BREWER_PAUSE = 8019;
+export const CMD_BREWER_RESUME = 8021;
+export const CMD_SET_WEIGHT_UNIT = 8005;
+export const CMD_SET_TEMPERATURE_UNIT = 8010;
+export const CMD_SET_WATER_SOURCE = 4508;
+export const CMD_SET_DISPLAY = 8103;
 
 function floatBits(value: number): number {
   const buf = new ArrayBuffer(4);
@@ -56,6 +64,12 @@ export function buildGrinderStop(): Uint8Array {
 export function buildGrinderQuit(): Uint8Array {
   return j15Frame(CMD_GRINDER_QUIT);
 }
+export function buildGrinderPause(): Uint8Array {
+  return j15Frame(CMD_GRINDER_PAUSE);
+}
+export function buildGrinderResume(): Uint8Array {
+  return j15Frame(CMD_GRINDER_RESUME);
+}
 
 export function buildBrewerEnter(tempC: number, pattern = "center"): Uint8Array {
   return j15Frame(CMD_BREWER_ENTER, {
@@ -89,4 +103,35 @@ export function buildBrewerStop(): Uint8Array {
 }
 export function buildBrewerQuit(): Uint8Array {
   return j15Frame(CMD_BREWER_QUIT);
+}
+export function buildBrewerPause(): Uint8Array {
+  return j15Frame(CMD_BREWER_PAUSE);
+}
+export function buildBrewerResume(): Uint8Array {
+  return j15Frame(CMD_BREWER_RESUME);
+}
+
+export type WeightUnit = "ml" | "g" | "oz";
+export type TemperatureUnit = "C" | "F";
+export type WaterSource = "tank" | "tap";
+export type DisplayLevel = "low" | "medium" | "high";
+
+export function buildSetWeightUnit(unit: WeightUnit): Uint8Array {
+  const values: Record<WeightUnit, number> = { ml: 0, g: 1, oz: 2 };
+  return j15Frame(CMD_SET_WEIGHT_UNIT, { data: [values[unit]] });
+}
+
+export function buildSetTemperatureUnit(unit: TemperatureUnit): Uint8Array {
+  const values: Record<TemperatureUnit, number> = { F: 0, C: 1 };
+  return j15Frame(CMD_SET_TEMPERATURE_UNIT, { data: [values[unit]] });
+}
+
+export function buildSetWaterSource(source: WaterSource): Uint8Array {
+  const values: Record<WaterSource, number> = { tank: 0, tap: 1 };
+  return j15Frame(CMD_SET_WATER_SOURCE, { data: [values[source]] });
+}
+
+export function buildSetDisplay(level: DisplayLevel): Uint8Array {
+  const values: Record<DisplayLevel, number> = { low: 1, medium: 8, high: 15 };
+  return j15Frame(CMD_SET_DISPLAY, { data: [values[level]] });
 }

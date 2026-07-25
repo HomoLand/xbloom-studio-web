@@ -190,7 +190,12 @@ export default function Recipes() {
       loadList();
       // Only re-open detail if the recipe still exists (e.g. not after delete).
       if (selectedId && getLocalRecipe(selectedId)) {
-        openDetail(selectedId);
+        openDetail(selectedId, { quietMissing: true });
+      } else if (selectedId && !getLocalRecipe(selectedId)) {
+        setSelectedId(null);
+        setDetail(null);
+        setLatest(null);
+        setLocalEntry(null);
       }
     } catch (e) {
       if (e instanceof CloudError && e.code === "not_on_account") {
@@ -875,7 +880,9 @@ export default function Recipes() {
                 ) : null}
                 {!canBrewWebBle && driver !== "web-bluetooth" ? (
                   <span className="text-xs text-ink-muted">
-                    {t("recipes.needWebBle")}
+                    {driver === "bridge"
+                      ? t("recipes.useBridgeDashboard")
+                      : t("recipes.needWebBle")}
                   </span>
                 ) : null}
                 {isCoffeeContent(content) && content.kind === "flash-brew" ? (

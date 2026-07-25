@@ -374,15 +374,23 @@ export async function loginEphemeral(opts: {
   if (!Number.isFinite(memberId) || memberId <= 0) {
     throw new CloudError("xBloom account login returned an invalid member session");
   }
+  const countryId = Number(
+    member.countryId ?? member.country_id ?? member.countryID ?? 0,
+  );
   return {
     region,
-    session: appBaseForm({
-      clientSecret,
-      interfaceVersion: CATALOG_INTERFACE_VERSION,
-      token,
-      memberId,
-      languageType: opts.languageType ?? 0,
-    }),
+    session: {
+      ...appBaseForm({
+        clientSecret,
+        interfaceVersion: CATALOG_INTERFACE_VERSION,
+        token,
+        memberId,
+        languageType: opts.languageType ?? 0,
+      }),
+      ...(Number.isFinite(countryId) && countryId > 0
+        ? { countryId }
+        : {}),
+    },
   };
 }
 

@@ -78,6 +78,21 @@ describe("parseNotification scale/water", () => {
     assert.equal(REPORT_NAMES[9006], "brewer_exited");
     assert.equal(REPORT_NAMES[10507], "scale_weight");
   });
+
+  it("decodes machine-info 40521 serial layout", async () => {
+    const { parseNotification: parse, MACHINE_INFO_COMMAND } = await import(
+      "./telemetry.ts"
+    );
+    // Golden built by Python test_telemetry (63-byte payload after c1).
+    const hex =
+      "580207499e4b000000c1534e31323334353637383930314a31352020205631322e30442e35303000002a42010203015c08180101000000000000000000000000000000000000000000ea10";
+    const ev = parse(hex)!;
+    assert.equal(ev.commandCode, MACHINE_INFO_COMMAND);
+    assert.equal(ev.stateName, "machine_info");
+    assert.equal(ev.machineInfo?.serialNumber, "SN12345678901");
+    assert.equal(ev.machineInfo?.model, "J15");
+    assert.equal(ev.machineInfo?.firmware, "V12.0D.500");
+  });
 });
 
 describe("NotificationFrameStream", () => {

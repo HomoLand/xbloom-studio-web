@@ -74,6 +74,99 @@ export default function Settings() {
   const [bleActionError, setBleActionError] = useState<string | null>(null);
   const [aiForm, setAiForm] = useState<AiConfig>(() => readAiConfig());
   const [aiMsg, setAiMsg] = useState<string | null>(null);
+  const [weightUnit, setWeightUnit] = useState<"ml" | "g" | "oz">("g");
+  const [tempUnit, setTempUnit] = useState<"C" | "F">("C");
+  const [waterSource, setWaterSource] = useState<"tank" | "tap">("tank");
+  const [displayLevel, setDisplayLevel] = useState<"low" | "medium" | "high">(
+    "medium",
+  );
+  const [machineBusy, setMachineBusy] = useState(false);
+  const [machineMsg, setMachineMsg] = useState<string | null>(null);
+  const [bridgeSnap, setBridgeSnap] = useState<{
+    reachable: boolean | null;
+    detail: string;
+  } | null>(null);
+  const [bridgeBusy, setBridgeBusy] = useState(false);
+
+  const refreshBridge = useCallback(async () => {
+    setBridgeBusy(true);
+    try {
+      const st = await api.bridge();
+      const phase =
+        st && typeof st === "object"
+          ? String(
+              (st as { phase?: string; connected?: boolean }).phase ??
+                ((st as { connected?: boolean }).connected
+                  ? "connected"
+                  : "unknown"),
+            )
+          : "unknown";
+      setBridgeSnap({
+        reachable: true,
+        detail: phase,
+      });
+    } catch (e) {
+      setBridgeSnap({
+        reachable: false,
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBridgeBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (driver === "bridge") void refreshBridge();
+  }, [driver, refreshBridge]);
+
+  useEffect(() => {
+    const info = bleSnapshot.machineInfo;
+    if (!info) return;
+    if (info.weightUnit === "ml" || info.weightUnit === "g" || info.weightUnit === "oz") {
+      setWeightUnit(info.weightUnit);
+    }
+    if (info.temperatureUnit === "C" || info.temperatureUnit === "F") {
+      setTempUnit(info.temperatureUnit);
+    }
+    if (info.waterSource === "tank" || info.waterSource === "tap") {
+      setWaterSource(info.waterSource);
+    }
+  }, [bleSnapshot.machineInfo]);
+
+  const applyMachineSettings = async () => {
+    setMachineMsg(null);
+    if (driver !== "web-bluetooth") {
+      setMachineMsg(t("settings.machineNeedBle"));
+      return;
+    }
+    setMachineBusy(true);
+    try {
+      if (
+        bleSnapshot.phase === "idle" ||
+        bleSnapshot.phase === "disconnected" ||
+        bleSnapshot.phase === "error"
+      ) {
+        await connectBle();
+      }
+      const info = await bleSession.writeMachineSettings({
+        weightUnit,
+        temperatureUnit: tempUnit,
+        waterSource,
+        display: displayLevel,
+      });
+      setMachineMsg(
+        t("settings.machineApplied")
+          .replace("{sn}", info.serialNumber || "—")
+          .replace("{fw}", info.firmware || "—"),
+      );
+    } catch (e) {
+      setMachineMsg(
+        "!" + (e instanceof Error ? e.message : String(e)),
+      );
+    } finally {
+      setMachineBusy(false);
+    }
+  };
 
   // xBloom account (password session-only)
   const initialPrefs = readAccountPrefs();
@@ -667,7 +760,146 @@ export default function Settings() {
               {webBluetooth.reason}
             </Alert>
           ) : null}
+          {bleSnapshot.machineInfo?.serialNumber ? (
+            <p className="mt-3 text-xs text-ink-muted">
+              SN {bleSnapshot.machineInfo.serialNumber}
+              {bleSnapshot.machineInfo.firmware
+                ? ` · ${bleSnapshot.machineInfo.firmware}`
+                : ""}
+              {bleSnapshot.machineInfo.weightUnit
+                ? ` · ${bleSnapshot.machineInfo.weightUnit}`
+                : ""}
+              {bleSnapshot.machineInfo.temperatureUnit
+                ? ` / ${bleSnapshot.machineInfo.temperatureUnit}`
+                : ""}
+              {bleSnapshot.machineInfo.waterSource
+                ? ` · ${bleSnapshot.machineInfo.waterSource}`
+                : ""}
+            </p>
+          ) : null}
         </Panel>
+
+        {driver === "web-bluetooth" ? (
+          <Panel title={t("settings.machine")}>
+            <p className="mb-3 text-sm text-ink-muted">
+              {t("settings.machineHint")}
+            </p>
+            <div className="mb-3 grid gap-2 sm:grid-cols-2">
+              <Field label={t("settings.weightUnit")}>
+                <Select
+                  value={weightUnit}
+                  onChange={(e) =>
+                    setWeightUnit(e.target.value as "ml" | "g" | "oz")
+                  }
+                  disabled={machineBusy}
+                >
+                  <option value="g">g</option>
+                  <option value="ml">ml</option>
+                  <option value="oz">oz</option>
+                </Select>
+              </Field>
+              <Field label={t("settings.tempUnit")}>
+                <Select
+                  value={tempUnit}
+                  onChange={(e) =>
+                    setTempUnit(e.target.value as "C" | "F")
+                  }
+                  disabled={machineBusy}
+                >
+                  <option value="C">°C</option>
+                  <option value="F">°F</option>
+                </Select>
+              </Field>
+              <Field label={t("settings.waterSource")}>
+                <Select
+                  value={waterSource}
+                  onChange={(e) =>
+                    setWaterSource(e.target.value as "tank" | "tap")
+                  }
+                  disabled={machineBusy}
+                >
+                  <option value="tank">tank</option>
+                  <option value="tap">tap</option>
+                </Select>
+              </Field>
+              <Field label={t("settings.display")}>
+                <Select
+                  value={displayLevel}
+                  onChange={(e) =>
+                    setDisplayLevel(
+                      e.target.value as "low" | "medium" | "high",
+                    )
+                  }
+                  disabled={machineBusy}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </Select>
+              </Field>
+            </div>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={machineBusy}
+              onClick={() => void applyMachineSettings()}
+            >
+              {machineBusy ? "…" : t("settings.applyMachine")}
+            </Button>
+            {machineMsg ? (
+              <Alert
+                tone={machineMsg.startsWith("!") ? "red" : "green"}
+                className="mt-3"
+              >
+                {machineMsg.startsWith("!")
+                  ? machineMsg.slice(1)
+                  : machineMsg}
+              </Alert>
+            ) : null}
+          </Panel>
+        ) : null}
+
+        {driver === "bridge" ? (
+          <Panel title={t("settings.bridgeStatus")}>
+            <p className="mb-3 text-sm text-ink-muted">
+              {t("settings.bridgeHint")}
+            </p>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <StatusPill
+                tone={
+                  bridgeSnap?.reachable === true
+                    ? "green"
+                    : bridgeSnap?.reachable === false
+                      ? "red"
+                      : "neutral"
+                }
+              >
+                {bridgeSnap?.reachable === true
+                  ? t("settings.bridgeOnline")
+                  : bridgeSnap?.reachable === false
+                    ? t("settings.bridgeOffline")
+                    : "—"}
+              </StatusPill>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={bridgeBusy}
+                onClick={() => void refreshBridge()}
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                {t("settings.bridgeRefresh")}
+              </Button>
+            </div>
+            {bridgeSnap?.detail ? (
+              <p className="text-xs text-ink-faint">{bridgeSnap.detail}</p>
+            ) : null}
+            <p className="mt-2 text-xs text-ink-muted">
+              <Link to="/" className="text-brand hover:underline">
+                Dashboard
+              </Link>
+            </p>
+          </Panel>
+        ) : null}
 
         <Panel title="Host connection">
           <dl className="grid gap-2 text-sm sm:grid-cols-2">

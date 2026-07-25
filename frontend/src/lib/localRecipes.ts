@@ -209,23 +209,42 @@ function parseOwnedTableIdFromRecipeId(recipeId: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** True when this browser row maps to a recipe owned on the signed-in account. */
+/**
+ * True when this browser row has a cloud table id on *this* account
+ * (can call created-list delete). Independent of UI label:
+ * - 分享 import only local → false
+ * - 分享 import then 上传 → true (label stays 分享 via source=shared)
+ * - 我的 / created → true
+ * - 官方 / product / pure inbound shared-list → false
+ */
 export function isOwnedOnCloud(
   entry: LocalRecipeEntry | null | undefined,
 ): boolean {
   if (!entry) return false;
   if (entry.source === "official") return false;
-  const tid = resolveOwnedTableId(entry);
-  if (tid == null) return false;
-  // Host catalog must not be deleted via created-delete API
-  if (entry.origin === "coffee" || entry.origin === "tea" || entry.origin === "product") {
+  if (
+    entry.origin === "coffee" ||
+    entry.origin === "tea" ||
+    entry.origin === "product"
+  ) {
     return false;
   }
+  const tid = resolveOwnedTableId(entry);
+  if (tid == null) return false;
+
+  // Pure share-list sync (never uploaded by us): origin stays "shared" and id
+  // is cloud:… from App shared endpoint — not on created-list for delete.
+  if (entry.origin === "shared" && entry.source === "shared") {
+    // Local share:… row that already has *our* table_id (post-upload, pre-rekey)
+    return entry.recipe_id.startsWith("share:");
+  }
+
+  // Uploaded share keeps source=shared but origin becomes "created".
+  // User-created and design-promoted rows use source=user / origin=created.
   return (
     entry.source === "user" ||
     entry.origin === "created" ||
-    // Uploaded copy of a share import (own table_id differs from author embed)
-    (entry.source === "shared" && tid != null)
+    entry.source === "shared"
   );
 }
 
@@ -263,7 +282,7 @@ export function listAllLocalRecipes(): LocalRecipeEntry[] {
 
 /**
  * After share-import → upload → account sync, the same brew may exist as
- * share:… (分享) and cloud:… (我的). Keep the owned cloud/user row.
+ * share:… (local import) and cloud:… (this account's copy). Keep the cloud row.
  */
 export function pruneRedundantShareCopies(): number {
   const raw = readUserRaw();
@@ -274,8 +293,11 @@ export function pruneRedundantShareCopies(): number {
 }
 
 /**
- * After a successful upload of a local (incl. share-import) recipe, re-key the
- * row to cloud:{region}:{tableId} as 我的 so a later sync does not create a twin.
+ * After a successful upload, re-key to cloud:{region}:{tableId} so delete works.
+ *
+ * Provenance: if the recipe was a share import (or still carries share meta),
+ * keep UI source **分享** (`shared`). Ownership for 删除云端 is `table_id` +
+ * origin `created` (this account's created list), not the label.
  */
 export function promoteLocalToCloudOwned(
   oldRecipeId: string,
@@ -287,18 +309,28 @@ export function promoteLocalToCloudOwned(
     shareAuthor?: string | null;
   },
 ): LocalRecipeEntry {
+  const prev =
+    readUserRaw().find((e) => e.recipe_id === oldRecipeId) ?? null;
+  const fromShare =
+    oldRecipeId.startsWith("share:") ||
+    prev?.source === "shared" ||
+    prev?.origin === "shared" ||
+    Boolean(opts.shareLink || opts.shareAuthor || prev?.share_link);
+
   const newId = `cloud:${opts.region}:${opts.tableId}`;
   if (oldRecipeId !== newId) {
     deleteUserRecipe(oldRecipeId);
   }
   return saveUserRecipe(opts.content, {
     recipeId: newId,
-    source: "user",
+    // Label stays 分享 when provenance is share; otherwise 我的.
+    source: fromShare ? "shared" : "user",
     tableId: opts.tableId,
     region: opts.region,
+    // Created-list membership (delete / update), not UI badge.
     origin: "created",
-    shareLink: opts.shareLink,
-    shareAuthor: opts.shareAuthor,
+    shareLink: opts.shareLink ?? prev?.share_link,
+    shareAuthor: opts.shareAuthor ?? prev?.share_author,
   });
 }
 
@@ -314,16 +346,21 @@ function dedupeShareVsCloudCopies(
   if (owned.length === 0) return entries;
 
   return entries.filter((e) => {
+    // Never drop account cloud rows — including uploaded shares that keep
+    // source=shared (UI 分享) with recipe_id cloud:region:tableId.
+    if (e.recipe_id.startsWith("cloud:")) return true;
+    // Only prune local share-import clones (share:… / legacy local shared).
     if (!e.recipe_id.startsWith("share:") && e.source !== "shared") return true;
-    // Drop share clone when an owned copy has same name + content, or same owned table id.
     const twin = owned.find((o) => {
+      if (o.recipe_id === e.recipe_id) return false;
       if (e.table_id != null && o.table_id != null && e.table_id === o.table_id) {
         return true;
       }
-      return (
-        normalizeRecipeName(o.name) === normalizeRecipeName(e.name) &&
-        recipeContentEquivalent(o.content, e.content)
-      );
+      if (normalizeRecipeName(o.name) !== normalizeRecipeName(e.name)) {
+        return false;
+      }
+      if (recipeContentEquivalent(o.content, e.content)) return true;
+      return o.recipe_id.startsWith("cloud:");
     });
     return !twin;
   });

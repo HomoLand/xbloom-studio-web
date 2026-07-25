@@ -78,7 +78,7 @@ export default function Tools() {
 
       {!webBle ? (
         <Alert tone="amber" className="mb-4">
-          {t("tools.needWebBle")}
+          {driver === "bridge" ? t("tools.bridgeModeHint") : t("tools.needWebBle")}
         </Alert>
       ) : null}
 
@@ -202,6 +202,26 @@ export default function Tools() {
             </Button>
             <Button
               size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("grind-pause", () => bleSession.grinderPause())
+              }
+            >
+              {btnLabel("grind-pause", t("tools.pause"))}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("grind-resume", () => bleSession.grinderResume())
+              }
+            >
+              {btnLabel("grind-resume", t("tools.resume"))}
+            </Button>
+            <Button
+              size="sm"
               variant="danger"
               disabled={busy != null}
               onClick={() =>
@@ -279,6 +299,26 @@ export default function Tools() {
               }
             >
               {btnLabel("water-start", t("tools.start"))}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("water-pause", () => bleSession.waterPause())
+              }
+            >
+              {btnLabel("water-pause", t("tools.pause"))}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy != null}
+              onClick={() =>
+                void run("water-resume", () => bleSession.waterResume())
+              }
+            >
+              {btnLabel("water-resume", t("tools.resume"))}
             </Button>
             <Button
               size="sm"

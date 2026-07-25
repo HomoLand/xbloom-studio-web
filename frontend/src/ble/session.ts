@@ -23,16 +23,28 @@ import {
 } from "./teaLoad.ts";
 import {
   buildBrewerEnter,
+  buildBrewerPause,
   buildBrewerQuit,
+  buildBrewerResume,
   buildBrewerStart,
   buildBrewerStop,
   buildGrinderEnter,
+  buildGrinderPause,
   buildGrinderQuit,
+  buildGrinderResume,
   buildGrinderStart,
   buildGrinderStop,
   buildScaleEnter,
   buildScaleExit,
   buildScaleTare,
+  buildSetDisplay,
+  buildSetTemperatureUnit,
+  buildSetWaterSource,
+  buildSetWeightUnit,
+  type DisplayLevel,
+  type TemperatureUnit,
+  type WaterSource,
+  type WeightUnit,
 } from "./extras.ts";
 import { buildSlotBatch } from "./slots.ts";
 import {
@@ -76,6 +88,7 @@ import {
   STATE_NAMES,
   STATUS_COMMAND,
   WATER_VOLUME_COMMAND,
+  type MachineInfo,
   type StatusEvent,
 } from "./telemetry.ts";
 
@@ -87,6 +100,28 @@ const TEA_ACTIVE_REPORTS = new Set([
   40520, // bypass_started (tea siphon finish phase on firmware)
   40502, // coffee_brewer_started (also used by some tea paths)
 ]);
+
+const MACHINE_SERIAL_KEY = "xbloom.machine.serial.v1";
+
+export function readCachedMachineSerial(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const s = localStorage.getItem(MACHINE_SERIAL_KEY)?.trim() ?? "";
+    return s.length >= 4 ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+export function cacheMachineSerial(sn: string): void {
+  const t = sn.trim();
+  if (t.length < 4 || typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(MACHINE_SERIAL_KEY, t);
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Throttle telemetry samples to keep localStorage small. */
 const TELEMETRY_SAMPLE_MIN_MS = 400;
@@ -182,6 +217,8 @@ export type SessionSnapshot = {
     outcome: string;
     at: string;
   } | null;
+  /** Latest 40521 identity dump (serial for Easy-mode cloud read). */
+  machineInfo: MachineInfo | null;
 };
 
 type Listener = (snap: SessionSnapshot) => void;
@@ -224,6 +261,8 @@ export class WebBleSession {
    */
   private brewActed = false;
   private lastCompletedBrew: SessionSnapshot["lastCompletedBrew"] = null;
+  private machineInfo: MachineInfo | null = null;
+  private machineInfoWaiters: Array<(info: MachineInfo | null) => void> = [];
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -269,6 +308,7 @@ export class WebBleSession {
       lastCompletedBrew: this.lastCompletedBrew
         ? { ...this.lastCompletedBrew }
         : null,
+      machineInfo: this.machineInfo ? { ...this.machineInfo } : null,
     };
   }
 
@@ -519,6 +559,17 @@ export class WebBleSession {
     if (ev.cupWeightG != null) this.cupWeightG = ev.cupWeightG;
     if (ev.scaleG != null) this.scaleG = ev.scaleG;
     if (ev.dispensedWaterMl != null) this.dispensedWaterMl = ev.dispensedWaterMl;
+    if (ev.machineInfo) {
+      this.machineInfo = ev.machineInfo;
+      if (ev.machineInfo.serialNumber?.trim()) {
+        cacheMachineSerial(ev.machineInfo.serialNumber);
+      }
+      const waiters = this.machineInfoWaiters.splice(0);
+      for (const w of waiters) w(ev.machineInfo);
+    } else if (ev.commandCode === 40521) {
+      // Seen 40521 but decode failed — keep activity for UI diagnostics.
+      this.lastActivityName = "machine_info_undecoded";
+    }
     this.maybeSampleTelemetry();
     this.emit();
   }
@@ -651,6 +702,18 @@ export class WebBleSession {
         this.cleanupHandles(true);
         return;
       }
+      // App/Python parity: a4 session-start then 0x56 status. 40521 (serial)
+      // usually arrives only after this handshake — not from status alone.
+      try {
+        await writeCommand(this.handles, buildSessionStart());
+        await sleep(300);
+      } catch {
+        /* status query still attempted */
+      }
+      if (gen !== this.connectGeneration) {
+        this.cleanupHandles(true);
+        return;
+      }
       await writeCommand(this.handles, buildStatusQuery());
       if (gen !== this.connectGeneration) {
         this.cleanupHandles(true);
@@ -660,6 +723,17 @@ export class WebBleSession {
       this.rememberDevice(device);
       this.setupInProgress = false;
       this.setPhase("connected");
+      // Non-blocking warm-cache of serial (40521). Failure is fine — explicit
+      // Easy-mode read will retry with full handshake / manual SN.
+      void (async () => {
+        try {
+          await sleep(200);
+          if (!this.handles) return;
+          await writeCommand(this.handles, buildStatusQuery());
+        } catch {
+          /* ignore */
+        }
+      })();
     } catch (err) {
       if (gen !== this.connectGeneration) {
         // Aborted — leave phase as idle (abortConnect already set it).
@@ -1087,6 +1161,12 @@ export class WebBleSession {
   async grinderStop(): Promise<void> {
     await this.requireWrite(buildGrinderStop());
   }
+  async grinderPause(): Promise<void> {
+    await this.requireWrite(buildGrinderPause());
+  }
+  async grinderResume(): Promise<void> {
+    await this.requireWrite(buildGrinderResume());
+  }
   async grinderQuit(): Promise<void> {
     await this.requireWrite(buildGrinderQuit());
   }
@@ -1108,8 +1188,122 @@ export class WebBleSession {
   async waterStop(): Promise<void> {
     await this.requireWrite(buildBrewerStop());
   }
+  async waterPause(): Promise<void> {
+    await this.requireWrite(buildBrewerPause());
+  }
+  async waterResume(): Promise<void> {
+    await this.requireWrite(buildBrewerResume());
+  }
   async waterQuit(): Promise<void> {
     await this.requireWrite(buildBrewerQuit());
+  }
+
+  /**
+   * Persist Studio display settings then refresh 40521 identity dump.
+   * Matches core set_machine_settings + read_machine_info.
+   */
+  async writeMachineSettings(opts: {
+    weightUnit?: WeightUnit;
+    temperatureUnit?: TemperatureUnit;
+    waterSource?: WaterSource;
+    display?: DisplayLevel;
+  }): Promise<MachineInfo> {
+    const frames: Uint8Array[] = [];
+    if (opts.weightUnit) frames.push(buildSetWeightUnit(opts.weightUnit));
+    if (opts.temperatureUnit)
+      frames.push(buildSetTemperatureUnit(opts.temperatureUnit));
+    if (opts.waterSource) frames.push(buildSetWaterSource(opts.waterSource));
+    if (opts.display) frames.push(buildSetDisplay(opts.display));
+    if (!frames.length) {
+      throw new BleGattError(
+        "At least one machine setting is required.",
+        "no_settings",
+      );
+    }
+    for (const frame of frames) {
+      await this.requireWrite(frame);
+      await sleep(120);
+    }
+    // Force a fresh 40521 (clear cache so readback is live).
+    this.machineInfo = null;
+    return this.readMachineInfo(8_000);
+  }
+
+  /**
+   * Request machine-info report 40521 (serial / firmware). Used for Easy-mode cloud read.
+   *
+   * Hardware needs app-style session handshake (a4) before status query reliably
+   * emits 40521 — matching packages/core open_session + request_status.
+   */
+  async readMachineInfo(timeoutMs = 8_000): Promise<MachineInfo> {
+    if (!this.handles) {
+      throw new BleGattError("Not connected.", "not_connected");
+    }
+    if (
+      this.machineInfo?.serialNumber &&
+      this.machineInfo.serialNumber.length >= 4
+    ) {
+      cacheMachineSerial(this.machineInfo.serialNumber);
+      return this.machineInfo;
+    }
+    const waitOnce = (ms: number) =>
+      new Promise<MachineInfo | null>((resolve) => {
+        if (
+          this.machineInfo?.serialNumber &&
+          this.machineInfo.serialNumber.length >= 4
+        ) {
+          resolve(this.machineInfo);
+          return;
+        }
+        const timer = setTimeout(() => {
+          this.machineInfoWaiters = this.machineInfoWaiters.filter(
+            (w) => w !== onInfo,
+          );
+          resolve(this.machineInfo);
+        }, ms);
+        const onInfo = (info: MachineInfo | null) => {
+          clearTimeout(timer);
+          resolve(info);
+        };
+        this.machineInfoWaiters.push(onInfo);
+      });
+
+    const probe = async (ms: number): Promise<MachineInfo | null> => {
+      const waiter = waitOnce(ms);
+      try {
+        // a4 then 0x56 — same order as Python load / open_session + request_status.
+        await this.requireWrite(buildSessionStart());
+        await sleep(350);
+        await this.requireWrite(buildStatusQuery());
+      } catch {
+        /* waiter timeout handles failure */
+      }
+      return waiter;
+    };
+
+    // First probe with full handshake; second is status-only after session open.
+    let info = await probe(Math.min(timeoutMs, 5_000));
+    if (!info?.serialNumber) {
+      await sleep(200);
+      const waiter = waitOnce(timeoutMs);
+      try {
+        await this.requireWrite(buildStatusQuery());
+        await sleep(150);
+        await this.requireWrite(buildStatusQuery());
+      } catch {
+        /* ignore */
+      }
+      info = await waiter;
+    }
+
+    if (info?.serialNumber && info.serialNumber.length >= 4) {
+      cacheMachineSerial(info.serialNumber);
+      return info;
+    }
+    throw new BleGattError(
+      "Machine did not return serial (40521). Keep Studio awake, close the official App, reconnect, then retry. Or enter SN manually below.",
+      "no_machine_info",
+    );
   }
 
   /**

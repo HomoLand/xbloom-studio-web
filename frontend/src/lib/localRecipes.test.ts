@@ -24,6 +24,7 @@ const store = new Map<string, string>();
 
 const {
   classifyCloudRecipeSource,
+  getLocalRecipe,
   isOwnedOnCloud,
   listAllLocalRecipes,
   pruneOfficialClonesFromUserStore,
@@ -194,6 +195,23 @@ describe("owned cloud table id", () => {
     assert.equal(isOwnedOnCloud(e), false);
   });
 
+  it("does not treat account shared-list cloud rows as deletable owned", () => {
+    const e = saveUserRecipe(
+      { ...teaContent, name: "别人分享" },
+      {
+        recipeId: "cloud:china:77",
+        source: "shared",
+        origin: "shared",
+        tableId: 77,
+        region: "china",
+      },
+    );
+    assert.equal(e.source, "shared");
+    assert.equal(e.origin, "shared");
+    assert.equal(isOwnedOnCloud(e), false);
+    assert.equal(isOwnedOnCloud(getLocalRecipe("cloud:china:77")), false);
+  });
+
   it("dedupes share import after promote/sync to cloud owned", () => {
     store.set(
       "xbloom.userRecipes.v1",
@@ -224,11 +242,12 @@ describe("owned cloud table id", () => {
     assert.ok(pruneRedundantShareCopies() >= 1);
     const list = listAllLocalRecipes().filter((r) => r.name === "over ice");
     assert.equal(list.length, 1);
-    assert.equal(list[0]!.source, "user");
+    // Surviving row is the cloud-owned copy (may be 我的 or 分享-uploaded)
     assert.ok(list[0]!.recipe_id.startsWith("cloud:"));
+    assert.equal(isOwnedOnCloud(list[0]!), true);
   });
 
-  it("promoteLocalToCloudOwned rekeys share id", () => {
+  it("promoteLocalToCloudOwned rekeys share id but keeps 分享 label", () => {
     saveUserRecipe(
       { ...teaContent, name: "dup" },
       { recipeId: "share:china:1", source: "shared", origin: "shared" },
@@ -239,8 +258,27 @@ describe("owned cloud table id", () => {
       region: "china",
     });
     assert.equal(p.recipe_id, "cloud:china:55");
-    assert.equal(p.source, "user");
+    // UI badge stays 分享 (provenance); cloud delete uses table_id + origin=created
+    assert.equal(p.source, "shared");
+    assert.equal(p.origin, "created");
+    assert.equal(p.table_id, 55);
+    assert.equal(isOwnedOnCloud(p), true);
     assert.equal(listAllLocalRecipes().filter((r) => r.name === "dup").length, 1);
+  });
+
+  it("promote of plain user recipe stays 我的", () => {
+    saveUserRecipe(
+      { ...teaContent, name: "mine" },
+      { recipeId: "user:abc", source: "user" },
+    );
+    const p = promoteLocalToCloudOwned("user:abc", {
+      content: { ...teaContent, name: "mine" },
+      tableId: 66,
+      region: "china",
+    });
+    assert.equal(p.source, "user");
+    assert.equal(p.origin, "created");
+    assert.equal(isOwnedOnCloud(p), true);
   });
 });
 

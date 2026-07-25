@@ -57,7 +57,18 @@ export const WATER_VOLUME_COMMAND = 40523;
 export const CUP_WEIGHT_COMMAND = 20501;
 export const SCALE_WEIGHT_COMMAND = 10507;
 export const STATUS_COMMAND = 8023;
+/** Studio identity/settings dump (serial, firmware, units). */
+export const MACHINE_INFO_COMMAND = 40521;
 export const STATE_MARKER = 0xc1;
+
+export type MachineInfo = {
+  serialNumber: string;
+  model: string;
+  firmware: string;
+  waterSource: string;
+  temperatureUnit: string;
+  weightUnit: string;
+};
 
 /**
  * Official report / activity names (core telemetry.REPORT_NAMES).
@@ -123,7 +134,53 @@ export type StatusEvent = {
   isTerminal: boolean;
   /** True for heartbeat-like status bytes that should not drive UI phase. */
   isIgnoredState?: boolean;
+  machineInfo?: MachineInfo | null;
 };
+
+/**
+ * Decode fixed-width Studio/J15 report 40521 (MachineInfoBleModel).
+ * Port of packages/core/xbloom_ble/telemetry.parse_machine_info_payload.
+ */
+export function parseMachineInfoPayload(
+  payload: Uint8Array,
+): MachineInfo | null {
+  if (payload.length < 42) return null;
+  const ascii = (start: number, end: number) => {
+    let s = "";
+    for (let i = start; i < end && i < payload.length; i++) {
+      const b = payload[i]!;
+      if (b === 0) break;
+      s += String.fromCharCode(b);
+    }
+    return s.trim();
+  };
+  const view = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
+  // area_ap at offset 29 is present but unused here
+  void view.getFloat32(29, true);
+  const waterRaw = payload[36]!;
+  const tempUnitRaw = payload[40]!;
+  const weightUnitRaw = payload[41]!;
+  return {
+    serialNumber: ascii(0, 13),
+    model: ascii(13, 19),
+    firmware: ascii(19, 29),
+    waterSource: waterRaw === 0 ? "tank" : waterRaw === 1 ? "tap" : `unknown_${waterRaw}`,
+    temperatureUnit:
+      tempUnitRaw === 0 ? "F" : tempUnitRaw === 1 ? "C" : `unknown_${tempUnitRaw}`,
+    weightUnit:
+      weightUnitRaw === 0
+        ? "ml"
+        : weightUnitRaw === 1
+          ? "g"
+          : weightUnitRaw === 2
+            ? "oz"
+            : `unknown_${weightUnitRaw}`,
+  };
+}
 
 export type NotificationFrameStats = {
   framesEmitted: number;
@@ -169,6 +226,27 @@ function markerIdx(data: Uint8Array): number {
     if (data[i] === STATE_MARKER) return i;
   }
   return -1;
+}
+
+/**
+ * 40521 body after fixed 9-byte header. Prefer official ``c1`` marker; fall back
+ * to fixed offsets when firmware omits the marker or binary floats confuse search.
+ */
+export function extractMachineInfoPayload(frame: Uint8Array): Uint8Array {
+  if (frame.length < MIN_NOTIFICATION_FRAME_LENGTH + 2) return new Uint8Array();
+  const end = frame.length - 2;
+  const marker = markerIdx(frame);
+  if (marker >= 0) {
+    const after = frame.subarray(marker + 1, end);
+    if (after.length >= 42) return after;
+  }
+  // Header is always 9 bytes; payload may start with optional 0xc1.
+  if (frame.length > 9 + 42 + 2) {
+    if (frame[9] === STATE_MARKER) return frame.subarray(10, end);
+    return frame.subarray(9, end);
+  }
+  if (frame[9] === STATE_MARKER) return frame.subarray(10, end);
+  return frame.subarray(9, end);
 }
 
 function decodeFloatMeasurement(
@@ -293,6 +371,21 @@ export function parseNotification(
         isTerminal: TERMINAL_STATES.has(state),
       };
     }
+  }
+
+  if (commandCode === MACHINE_INFO_COMMAND) {
+    const info = parseMachineInfoPayload(extractMachineInfoPayload(frame));
+    return {
+      state: null,
+      stateName: "machine_info",
+      raw: frame,
+      commandCode,
+      dispensedWaterMl: null,
+      cupWeightG: null,
+      scaleG: null,
+      isTerminal: false,
+      machineInfo: info,
+    };
   }
 
   // Command echo / FreeSolo activity report — name from official report table.
