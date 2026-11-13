@@ -16,7 +16,21 @@ export function RecipeCard({ content, name, badge, subtitle, compact = false, ch
   const coffee = isCoffeeContent(content);
   const flash = coffee && content.kind === "flash-brew";
   const Icon = coffee ? flash ? Snowflake : Coffee : Leaf;
-  const temperature = (value: number | string) => typeof value === "number" ? `${value}°C` : value;
+  const temperature = (value: number | string) => {
+    if (value === "RT") return t("editor.tempRoom");
+    if (value === "BP") return t("editor.tempBoiling");
+    return typeof value === "number" ? `${value}°C` : value;
+  };
+  const labelPattern = (pattern: string) => {
+    const key = `pattern.${pattern}` as Parameters<typeof t>[0];
+    const out = t(key);
+    return out === key ? pattern : out;
+  };
+  const labelVibration = (vibration: string) => {
+    const key = `vibration.${vibration}` as Parameters<typeof t>[0];
+    const out = t(key);
+    return out === key ? vibration : out;
+  };
   return <article className="flex h-full min-w-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-sm" data-testid="recipe-card">
     <header className="border-b border-line bg-surface-2 px-5 py-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-muted">
@@ -46,7 +60,7 @@ export function RecipeCard({ content, name, badge, subtitle, compact = false, ch
             <span className="block font-medium tabular-nums">{pour.ml} ml</span><span className="mt-1 block text-ink-muted">{temperature(pour.temp_c)}</span>
           </li> : <li key={index} className="rounded-xl bg-surface-2 px-3 py-2.5 text-sm">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="text-xs text-ink-faint">{index + 1}.</span><span className="min-w-0 flex-1 break-words">{pour.label}</span><span className="tabular-nums">{pour.ml} ml · {temperature(pour.temp_c)} · {pour.pause_s}s</span></div>
-            <p className="mt-1 text-xs text-ink-muted">{pour.pattern} · {pour.flow_ml_s} ml/s{"rpm" in pour ? ` · ${pour.rpm} rpm` : ""}{"vibration" in pour && pour.vibration && pour.vibration !== "none" ? ` · ${t("recipeCard.vibration")} ${pour.vibration}` : ""}</p>
+            <p className="mt-1 text-xs text-ink-muted">{labelPattern(pour.pattern)} · {pour.flow_ml_s} ml/s{"rpm" in pour ? ` · ${pour.rpm} rpm` : ""}{"vibration" in pour && pour.vibration && pour.vibration !== "none" ? ` · ${t("recipeCard.vibration")} ${labelVibration(pour.vibration)}` : ""}</p>
           </li>)}
         </ol>
       </div>

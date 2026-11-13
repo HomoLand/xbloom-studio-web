@@ -9,6 +9,7 @@ import {
   CloudUpload,
   Download,
   Link2,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
@@ -95,6 +96,7 @@ export default function Recipes() {
   const [latest, setLatest] = useState<RecipeRevision | null>(null);
   const [localEntry, setLocalEntry] = useState<LocalRecipeEntry | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
+  const [detailMenuOpen, setDetailMenuOpen] = useState(false);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<"all" | "coffee" | "tea">("all");
   const [query, setQuery] = useState("");
@@ -166,7 +168,11 @@ export default function Recipes() {
 
   const content: RecipeContent | null = latest?.content ?? null;
   const closeDetail = () => {
-    setSelectedId(null); setDetail(null); setLatest(null); setLocalEntry(null);
+    setSelectedId(null);
+    setDetail(null);
+    setLatest(null);
+    setLocalEntry(null);
+    setDetailMenuOpen(false);
     if (searchParams.has("selected")) setSearchParams({}, { replace: true });
   };
   const canBrewContent =
@@ -711,7 +717,7 @@ export default function Recipes() {
                   ) : null}
                 </div>
               ) : null}
-              <div className="flex flex-wrap gap-2 pt-1">
+              <div className="relative flex flex-wrap items-center gap-2 pt-1">
                 <Button
                   variant="primary"
                   size="sm"
@@ -727,7 +733,6 @@ export default function Recipes() {
                 >
                   <Play className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.brew")}
-                  {driver === "bridge" ? ` · Bridge` : ""}
                 </Button>
                 <Link
                   to={`/recipes/edit?id=${encodeURIComponent(detail.recipe_id)}${hostRecipes.current.has(detail.recipe_id) ? "&host=1" : ""}`}
@@ -736,19 +741,6 @@ export default function Recipes() {
                   <Pencil className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.edit")}
                 </Link>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    downloadText(
-                      `${detail.name.replace(/\s+/g, "-")}.json`,
-                      exportSingleRecipeJson(content),
-                    )
-                  }
-                >
-                  <Download className="h-3.5 w-3.5" aria-hidden />
-                  JSON
-                </Button>
                 {localEntry?.share_link ? (
                   <Button
                     variant="secondary"
@@ -756,84 +748,154 @@ export default function Recipes() {
                     onClick={() => void onCopyShare()}
                   >
                     <Share2 className="h-3.5 w-3.5" aria-hidden />
-                    {t("share.copyLink")}
+                    {t("recipes.copyShareLink")}
                   </Button>
-                ) : null}
-                {resolveOwnedTableId(localEntry) != null ||
-                localEntry?.share_link ? (
+                ) : resolveOwnedTableId(localEntry) != null ? (
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={
-                      cloudBusy != null ||
-                      (resolveOwnedTableId(localEntry) == null &&
-                        !localEntry?.share_link)
-                    }
+                    disabled={cloudBusy != null}
                     onClick={onCreateShare}
-                    title={
-                      resolveOwnedTableId(localEntry) == null
-                        ? t("share.needTableId")
-                        : t("share.createHint")
-                    }
                   >
                     <Share2 className="h-3.5 w-3.5" aria-hidden />
                     {cloudBusy === "share-create"
                       ? t("common.loading")
                       : t("share.create")}
                   </Button>
-                ) : null}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={cloudBusy != null || !content}
-                  onClick={onPush}
-                >
-                  <CloudUpload className="h-3.5 w-3.5" aria-hidden />
-                  {cloudBusy === "push" ? t("common.loading") : t("cloud.push")}
-                </Button>
-                {isOwnedOnCloud(localEntry) ? (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={cloudBusy != null}
-                      onClick={onUpdateCloud}
-                    >
-                      {cloudBusy === "update"
-                        ? t("common.loading")
-                        : t("cloud.update")}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={cloudBusy != null}
-                      onClick={onDeleteCloud}
-                    >
-                      {cloudBusy === "delete"
-                        ? t("common.loading")
-                        : t("cloud.delete")}
-                    </Button>
-                  </>
-                ) : null}
-                {hostRecipes.current.has(detail.recipe_id) ? <Button size="sm" variant="secondary" onClick={() => void onArchiveHost()}>{t("recipes.archive")}</Button> : null}
-                {localEntry && localEntry.source !== "official" ? (
+                ) : (
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={onDeleteLocal}
+                    disabled={cloudBusy != null || !content}
+                    onClick={onPush}
                   >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                    {t("recipes.deleteLocal")}
+                    <CloudUpload className="h-3.5 w-3.5" aria-hidden />
+                    {cloudBusy === "push"
+                      ? t("common.loading")
+                      : t("recipes.syncToCloud")}
                   </Button>
-                ) : null}
+                )}
+
+                <div className="relative ml-auto">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label={t("recipes.moreActions")}
+                    aria-expanded={detailMenuOpen}
+                    onClick={() => setDetailMenuOpen((open) => !open)}
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+                  </Button>
+                  {detailMenuOpen ? (
+                    <div className="absolute bottom-full right-0 z-20 mb-2 min-w-48 max-w-[calc(100vw-3rem)] rounded-2xl border border-line bg-surface p-1.5 shadow-xl">
+                      {(localEntry?.share_link ||
+                        resolveOwnedTableId(localEntry) != null) &&
+                      content ? (
+                        <button
+                          type="button"
+                          disabled={cloudBusy != null}
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            onPush();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <CloudUpload className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                          {t("recipes.syncToCloud")}
+                        </button>
+                      ) : null}
+                      {localEntry?.share_link &&
+                      resolveOwnedTableId(localEntry) != null ? (
+                        <button
+                          type="button"
+                          disabled={cloudBusy != null}
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            onCreateShare();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <Share2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                          {t("share.create")}
+                        </button>
+                      ) : null}
+                      {isOwnedOnCloud(localEntry) ? (
+                        <button
+                          type="button"
+                          disabled={cloudBusy != null}
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            onUpdateCloud();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <Cloud className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                          {t("recipes.updateCloud")}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailMenuOpen(false);
+                          downloadText(
+                            `${detail.name.replace(/\s+/g, "-")}.json`,
+                            exportSingleRecipeJson(content),
+                          );
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2"
+                      >
+                        <Download className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                        {t("recipes.exportJson")}
+                      </button>
+                      {hostRecipes.current.has(detail.recipe_id) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            void onArchiveHost();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                          {t("recipes.archive")}
+                        </button>
+                      ) : null}
+                      {localEntry && localEntry.source !== "official" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            onDeleteLocal();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-surface-2"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                          {t("recipes.deleteLocal")}
+                        </button>
+                      ) : null}
+                      {isOwnedOnCloud(localEntry) ? (
+                        <button
+                          type="button"
+                          disabled={cloudBusy != null}
+                          onClick={() => {
+                            setDetailMenuOpen(false);
+                            onDeleteCloud();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs text-accent-red hover:bg-surface-2 disabled:opacity-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                          {cloudBusy === "delete"
+                            ? t("recipes.deleting")
+                            : t("recipes.deleteCloud")}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
                 {!canBrew && !canBrewContent ? (
                   <span className="text-xs text-ink-muted">
                     {t("recipes.needBrewable")}
-                  </span>
-                ) : null}
-                {canBrew && driver === "bridge" ? (
-                  <span className="text-xs text-ink-faint">
-                    {t("recipes.bridgeBrewHint")}
                   </span>
                 ) : null}
                 {isCoffeeContent(content) && content.kind === "flash-brew" ? (

@@ -164,7 +164,7 @@ export function filterLocalHistory(
     query?: string;
     kind?: "all" | "coffee" | "tea" | string;
     outcome?: "all" | "completed" | "failed" | string;
-    source?: "all" | "web-bluetooth" | "app-cloud" | string;
+    source?: "all" | "web-bluetooth" | "app-cloud" | "host" | string;
   },
 ): LocalHistoryEvent[] {
   const q = (opts.query || "").trim().toLowerCase();
@@ -185,7 +185,9 @@ export function filterLocalHistory(
     } else if (outcome !== "all" && outcome) {
       if (e.outcome !== outcome) return false;
     }
-    if (source !== "all" && source) {
+    if (source === "host") {
+      if (e.source === "web-bluetooth" || e.source === "app-cloud") return false;
+    } else if (source !== "all" && source) {
       if (e.source !== source) return false;
     }
     if (q) {
@@ -401,4 +403,98 @@ export function importCloudBrewRecords(
   }
   writeAll(next);
   return { imported, updated, skipped, total: readAll().length };
+}
+
+
+export type HostHistoryEventLike = {
+  event_id: string;
+  outcome: string;
+  source: string;
+  recipe_name?: string;
+  machine?: string;
+  recorded_at?: string;
+  note?: string;
+  recipe_revision_id?: string;
+  workflow_id?: string;
+  [key: string]: unknown;
+};
+
+export function hostHistoryEventToLocal(
+  event: HostHistoryEventLike,
+): LocalHistoryEvent {
+  return {
+    event_id:
+      event.event_id ||
+      (event.workflow_id ? `host:${event.workflow_id}` : newId()),
+    outcome: event.outcome || "completed",
+    source: event.source || "host",
+    recipe_name:
+      event.recipe_name ??
+      (typeof event.name === "string" ? event.name : undefined),
+    recipe_revision_id: event.recipe_revision_id,
+    workflow_id: event.workflow_id,
+    recorded_at: event.recorded_at || new Date(0).toISOString(),
+    note: event.note,
+    kind: typeof event.kind === "string" ? event.kind : undefined,
+    machine: event.machine,
+    brew_time_s:
+      typeof event.brew_time_s === "number" ? event.brew_time_s : null,
+    dose_g: typeof event.dose_g === "number" ? event.dose_g : null,
+    serving_kind:
+      typeof event.serving_kind === "string" ? event.serving_kind : undefined,
+  };
+}
+
+/**
+ * Merge host SQLite history records with browser-local/cloud history records.
+ * Deduplicates by event_id or workflow_id while preserving local telemetry.
+ */
+export function mergeHostAndLocalHistory(
+  hostEvents: HostHistoryEventLike[],
+  localEvents: LocalHistoryEvent[],
+): LocalHistoryEvent[] {
+  const merged = localEvents.map((e) => ({ ...e }));
+  const byEventId = new Map<string, number>();
+  const byWorkflowId = new Map<string, number>();
+  merged.forEach((item, idx) => {
+    if (item.event_id) byEventId.set(item.event_id, idx);
+    if (item.workflow_id) byWorkflowId.set(item.workflow_id, idx);
+  });
+
+  for (const rawHost of hostEvents) {
+    const hostEv = hostHistoryEventToLocal(rawHost);
+    const existingIdx =
+      byEventId.get(hostEv.event_id) ??
+      (hostEv.workflow_id ? byWorkflowId.get(hostEv.workflow_id) : undefined);
+
+    if (existingIdx !== undefined) {
+      const current = merged[existingIdx];
+      merged[existingIdx] = {
+        ...hostEv,
+        ...current,
+        recipe_name: current.recipe_name ?? hostEv.recipe_name,
+        recipe_revision_id:
+          current.recipe_revision_id ?? hostEv.recipe_revision_id,
+        machine: current.machine ?? hostEv.machine,
+        note: current.note ?? hostEv.note,
+        kind: current.kind ?? hostEv.kind,
+        brew_time_s: current.brew_time_s ?? hostEv.brew_time_s,
+        dose_g: current.dose_g ?? hostEv.dose_g,
+      };
+      continue;
+    }
+
+    const nextIdx = merged.length;
+    merged.push(hostEv);
+    if (hostEv.event_id) byEventId.set(hostEv.event_id, nextIdx);
+    if (hostEv.workflow_id) byWorkflowId.set(hostEv.workflow_id, nextIdx);
+  }
+
+  return merged.sort((a, b) => {
+    const ta = Date.parse(a.recorded_at || "");
+    const tb = Date.parse(b.recorded_at || "");
+    const na = Number.isNaN(ta) ? 0 : ta;
+    const nb = Number.isNaN(tb) ? 0 : tb;
+    return nb - na;
+  });
 }

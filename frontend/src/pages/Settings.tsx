@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Bluetooth,
+  ChevronDown,
   Cloud,
   History as HistoryIcon,
   LogOut,
@@ -204,6 +205,26 @@ export default function Settings() {
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [serverAiModel, setServerAiModel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode === "static") {
+      setServerAiModel(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .designConfig()
+      .then((cfg) => {
+        if (!cancelled && cfg?.model) setServerAiModel(cfg.model);
+      })
+      .catch(() => {
+        if (!cancelled) setServerAiModel(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   const loadSessions = useCallback(async () => {
     if (mode === "static") {
@@ -494,599 +515,721 @@ export default function Settings() {
           </p>
         </Panel>
 
-        <Panel title={t("settings.language")}>
-          <div className="flex flex-wrap gap-2">
-            {locales.map((code) => (
-              <Button
-                key={code}
-                size="sm"
-                variant={locale === code ? "primary" : "secondary"}
-                onClick={() => setLocale(code as Locale)}
-              >
-                {localeLabels[code]}
-              </Button>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title={t("settings.ai")}>
-          <p className="mb-3 text-sm text-ink-muted">{t("settings.aiHint")}</p>
-          <div className="space-y-3">
-            <Field label={t("settings.baseUrl")} htmlFor="ai-base">
-              <TextInput
-                id="ai-base"
-                value={aiForm.baseUrl}
-                placeholder="https://api.openai.com/v1"
-                onChange={(e) =>
-                  setAiForm((s) => ({ ...s, baseUrl: e.target.value }))
-                }
-                autoComplete="off"
-              />
-            </Field>
-            <Field label={t("settings.apiKey")} htmlFor="ai-key">
-              <TextInput
-                id="ai-key"
-                type="password"
-                value={aiForm.apiKey}
-                placeholder="sk-..."
-                onChange={(e) =>
-                  setAiForm((s) => ({ ...s, apiKey: e.target.value }))
-                }
-                autoComplete="off"
-              />
-            </Field>
-            <Field label={t("settings.model")} htmlFor="ai-model">
-              <TextInput
-                id="ai-model"
-                value={aiForm.model}
-                placeholder="gpt-4o-mini"
-                onChange={(e) =>
-                  setAiForm((s) => ({ ...s, model: e.target.value }))
-                }
-                autoComplete="off"
-              />
-            </Field>
-            {aiMsg ? <Alert tone="green">{aiMsg}</Alert> : null}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => {
-                  writeAiConfig(aiForm);
-                  setAiForm(readAiConfig());
-                  setAiMsg(t("settings.aiSaved"));
-                }}
-              >
-                {t("settings.saveAi")}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  clearAiConfig();
-                  setAiForm(readAiConfig());
-                  setAiMsg(null);
-                }}
-              >
-                {t("settings.clearAi")}
-              </Button>
-              <StatusPill tone={isAiConfigured(aiForm) ? "green" : "neutral"}>
-                {isAiConfigured(aiForm)
-                  ? t("settings.configured")
-                  : t("settings.notSet")}
-              </StatusPill>
+        <Panel title={t("settings.prefsTitle")}>
+          <div className="space-y-4">
+            <div>
+              <p className="mb-2 text-xs font-medium text-ink-muted">
+                {t("settings.language")}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {locales.map((code) => (
+                  <Button
+                    key={code}
+                    size="sm"
+                    variant={locale === code ? "primary" : "secondary"}
+                    onClick={() => setLocale(code as Locale)}
+                  >
+                    {localeLabels[code]}
+                  </Button>
+                ))}
+              </div>
             </div>
-          </div>
-        </Panel>
 
-        <Panel title={t("settings.driver")}>
-          <p className="mb-3 text-sm text-ink-muted">{t("settings.driverHint")}</p>
-          <div className="flex flex-wrap gap-2">
-            {(
-              [
-                {
-                  id: "bridge" as MachineDriver,
-                  label: t("settings.bridge"),
-                },
-                {
-                  id: "web-bluetooth" as MachineDriver,
-                  label: t("settings.webBle"),
-                },
-              ] as const
-            ).map((opt) => {
-              const active = driver === opt.id;
-              return (
-                <Button
-                  key={opt.id}
-                  size="sm"
-                  variant={active ? "primary" : "secondary"}
-                  onClick={() => setDriver(opt.id)}
-                >
-                  {opt.label}
-                </Button>
-              );
-            })}
-          </div>
-          <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-            <Row label={t("settings.activeDriver")} value={driver} />
-            <Row
-              label={t("settings.webBleAvail")}
-              value={
-                webBluetooth.usable
-                  ? t("settings.available")
-                  : webBluetooth.reason ?? t("settings.unavailable")
-              }
-            />
-            <Row
-              label={t("settings.bleSession")}
-              value={tPhase(bleSnapshot.phase)}
-            />
-            <Row
-              label={t("dashboard.device")}
-              value={
-                bleSnapshot.deviceName ||
-                bleSnapshot.deviceId ||
-                (driver === "web-bluetooth"
-                  ? t("dashboard.notConnected")
-                  : "—")
-              }
-            />
-            <Row
-              label={t("dashboard.phase")}
-              value={
-                bleSnapshot.machineStateName
-                  ? tStatus(bleSnapshot.machineStateName)
-                  : "—"
-              }
-            />
-            <Row
-              label={t("dashboard.cup")}
-              value={
-                bleSnapshot.cupWeightG != null
-                  ? `${bleSnapshot.cupWeightG} g`
-                  : "—"
-              }
-            />
-            <Row
-              label={t("dashboard.water")}
-              value={
-                bleSnapshot.dispensedWaterMl != null
-                  ? `${bleSnapshot.dispensedWaterMl} ml`
-                  : "—"
-              }
-            />
-          </dl>
-          {driver === "web-bluetooth" ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {bleSnapshot.phase === "connecting" ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={bleBusy}
-                  onClick={() => {
-                    bleSession.abortConnect();
-                    setBleBusy(false);
-                    setBleActionError(null);
-                  }}
-                >
-                  {t("settings.cancelConnecting")}
-                </Button>
-              ) : (
+            {serverAiModel ? (
+              <div className="border-t border-line pt-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <StatusPill tone="green">
+                    {t("settings.aiServerReady").replace(
+                      "{model}",
+                      serverAiModel,
+                    )}
+                  </StatusPill>
+                </div>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs text-ink-muted hover:text-ink">
+                    {t("settings.aiOverrideHint")}
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <Field label={t("settings.baseUrl")} htmlFor="ai-base">
+                      <TextInput
+                        id="ai-base"
+                        value={aiForm.baseUrl}
+                        placeholder="https://api.openai.com/v1"
+                        onChange={(e) =>
+                          setAiForm((s) => ({ ...s, baseUrl: e.target.value }))
+                        }
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Field label={t("settings.apiKey")} htmlFor="ai-key">
+                      <TextInput
+                        id="ai-key"
+                        type="password"
+                        value={aiForm.apiKey}
+                        placeholder="sk-..."
+                        onChange={(e) =>
+                          setAiForm((s) => ({ ...s, apiKey: e.target.value }))
+                        }
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Field label={t("settings.model")} htmlFor="ai-model">
+                      <TextInput
+                        id="ai-model"
+                        value={aiForm.model}
+                        placeholder="gpt-4o-mini"
+                        onChange={(e) =>
+                          setAiForm((s) => ({ ...s, model: e.target.value }))
+                        }
+                        autoComplete="off"
+                      />
+                    </Field>
+                    {aiMsg ? <Alert tone="green">{aiMsg}</Alert> : null}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          writeAiConfig(aiForm);
+                          setAiForm(readAiConfig());
+                          setAiMsg(t("settings.aiSaved"));
+                        }}
+                      >
+                        {t("settings.saveAi")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          clearAiConfig();
+                          setAiForm(readAiConfig());
+                          setAiMsg(null);
+                        }}
+                      >
+                        {t("settings.clearAi")}
+                      </Button>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            ) : null}
+
+            {driver === "web-bluetooth" ? (
+              <div className="border-t border-line pt-4">
+                <p className="mb-1 text-sm font-medium text-ink">
+                  {t("settings.machine")}
+                </p>
+                <p className="mb-3 text-xs text-ink-muted">
+                  {t("settings.machineHint")}
+                </p>
+                <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                  <Field label={t("settings.weightUnit")}>
+                    <Select
+                      value={weightUnit}
+                      onChange={(e) =>
+                        setWeightUnit(e.target.value as "ml" | "g" | "oz")
+                      }
+                      disabled={machineBusy}
+                    >
+                      <option value="g">g</option>
+                      <option value="ml">ml</option>
+                      <option value="oz">oz</option>
+                    </Select>
+                  </Field>
+                  <Field label={t("settings.tempUnit")}>
+                    <Select
+                      value={tempUnit}
+                      onChange={(e) =>
+                        setTempUnit(e.target.value as "C" | "F")
+                      }
+                      disabled={machineBusy}
+                    >
+                      <option value="C">°C</option>
+                      <option value="F">°F</option>
+                    </Select>
+                  </Field>
+                  <Field label={t("settings.waterSource")}>
+                    <Select
+                      value={waterSource}
+                      onChange={(e) =>
+                        setWaterSource(e.target.value as "tank" | "tap")
+                      }
+                      disabled={machineBusy}
+                    >
+                      <option value="tank">{t("settings.waterTank")}</option>
+                      <option value="tap">{t("settings.waterTap")}</option>
+                    </Select>
+                  </Field>
+                  <Field label={t("settings.display")}>
+                    <Select
+                      value={displayLevel}
+                      onChange={(e) =>
+                        setDisplayLevel(
+                          e.target.value as "low" | "medium" | "high",
+                        )
+                      }
+                      disabled={machineBusy}
+                    >
+                      <option value="low">{t("settings.displayLow")}</option>
+                      <option value="medium">{t("settings.displayMedium")}</option>
+                      <option value="high">{t("settings.displayHigh")}</option>
+                    </Select>
+                  </Field>
+                </div>
                 <Button
                   size="sm"
                   variant="primary"
-                  disabled={bleBusy}
+                  disabled={machineBusy}
+                  onClick={() => void applyMachineSettings()}
+                >
+                  {machineBusy ? "…" : t("settings.applyMachine")}
+                </Button>
+                {machineMsg ? (
+                  <Alert
+                    tone={machineMsg.startsWith("!") ? "red" : "green"}
+                    className="mt-3"
+                  >
+                    {machineMsg.startsWith("!")
+                      ? machineMsg.slice(1)
+                      : machineMsg}
+                  </Alert>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </Panel>
+
+        {!serverAiModel ? (
+          <Panel title={t("settings.ai")}>
+            <p className="mb-3 text-sm text-ink-muted">{t("settings.aiHint")}</p>
+            <div className="space-y-3">
+              <Field label={t("settings.baseUrl")} htmlFor="ai-base">
+                <TextInput
+                  id="ai-base"
+                  value={aiForm.baseUrl}
+                  placeholder="https://api.openai.com/v1"
+                  onChange={(e) =>
+                    setAiForm((s) => ({ ...s, baseUrl: e.target.value }))
+                  }
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label={t("settings.apiKey")} htmlFor="ai-key">
+                <TextInput
+                  id="ai-key"
+                  type="password"
+                  value={aiForm.apiKey}
+                  placeholder="sk-..."
+                  onChange={(e) =>
+                    setAiForm((s) => ({ ...s, apiKey: e.target.value }))
+                  }
+                  autoComplete="off"
+                />
+              </Field>
+              <Field label={t("settings.model")} htmlFor="ai-model">
+                <TextInput
+                  id="ai-model"
+                  value={aiForm.model}
+                  placeholder="gpt-4o-mini"
+                  onChange={(e) =>
+                    setAiForm((s) => ({ ...s, model: e.target.value }))
+                  }
+                  autoComplete="off"
+                />
+              </Field>
+              {aiMsg ? <Alert tone="green">{aiMsg}</Alert> : null}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="primary"
                   onClick={() => {
-                    // Saved pair reconnects without picker; first pair needs chooser.
-                    setBleActionError(null);
-                    setBleBusy(true);
-                    void connectBle()
-                      .catch((e) =>
-                        setBleActionError(
-                          e instanceof Error ? e.message : String(e),
-                        ),
-                      )
-                      .finally(() => setBleBusy(false));
+                    writeAiConfig(aiForm);
+                    setAiForm(readAiConfig());
+                    setAiMsg(t("settings.aiSaved"));
                   }}
                 >
-                  <Bluetooth className="h-3.5 w-3.5" aria-hidden />
-                  {bleSnapshot.phase === "connected"
-                    ? t("settings.reconnect")
-                    : bleSnapshot.hasPairedDevice
-                      ? t("dashboard.connectRemembered")
-                      : t("settings.connect")}
+                  {t("settings.saveAi")}
                 </Button>
-              )}
-              {bleSnapshot.hasPairedDevice &&
-              bleSnapshot.phase !== "connecting" ? (
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={bleBusy}
                   onClick={() => {
-                    setBleActionError(null);
-                    setBleBusy(true);
-                    void connectBle({ forcePicker: true })
-                      .catch((e) =>
-                        setBleActionError(
-                          e instanceof Error ? e.message : String(e),
-                        ),
-                      )
-                      .finally(() => setBleBusy(false));
+                    clearAiConfig();
+                    setAiForm(readAiConfig());
+                    setAiMsg(null);
                   }}
                 >
-                  {t("dashboard.pickOtherDevice")}
+                  {t("settings.clearAi")}
                 </Button>
-              ) : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={
-                  bleBusy ||
-                  bleSnapshot.phase === "idle" ||
-                  bleSnapshot.phase === "disconnected" ||
-                  bleSnapshot.phase === "connecting"
-                }
-                onClick={() => {
-                  setBleBusy(true);
-                  setBleActionError(null);
-                  void disconnectBle()
-                    .catch((e) =>
-                      setBleActionError(
-                        e instanceof Error ? e.message : String(e),
-                      ),
-                    )
-                    .finally(() => setBleBusy(false));
-                }}
-              >
-                {t("settings.disconnect")}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={bleBusy || bleSnapshot.phase === "connecting"}
-                onClick={() => {
-                  setBleBusy(true);
-                  setBleActionError(null);
-                  void bleSession
-                    .forgetDevice()
-                    .catch((e) =>
-                      setBleActionError(
-                        e instanceof Error ? e.message : String(e),
-                      ),
-                    )
-                    .finally(() => setBleBusy(false));
-                }}
-              >
-                {t("settings.forgetDevice")}
-              </Button>
+                <StatusPill tone={isAiConfigured(aiForm) ? "green" : "neutral"}>
+                  {isAiConfigured(aiForm)
+                    ? t("settings.configured")
+                    : t("settings.notSet")}
+                </StatusPill>
+              </div>
             </div>
-          ) : null}
-          {bleSnapshot.lastError || bleActionError ? (
-            <Alert tone="red" className="mt-3">
-              {bleActionError ?? bleSnapshot.lastError}
-            </Alert>
-          ) : null}
-          {driver === "web-bluetooth" && !webBluetooth.usable ? (
-            <Alert tone="amber" className="mt-3">
-              {webBluetooth.reason}
-            </Alert>
-          ) : null}
-          {bleSnapshot.machineInfo?.serialNumber ? (
-            <p className="mt-3 text-xs text-ink-muted">
-              SN {bleSnapshot.machineInfo.serialNumber}
-              {bleSnapshot.machineInfo.firmware
-                ? ` · ${bleSnapshot.machineInfo.firmware}`
-                : ""}
-              {bleSnapshot.machineInfo.weightUnit
-                ? ` · ${bleSnapshot.machineInfo.weightUnit}`
-                : ""}
-              {bleSnapshot.machineInfo.temperatureUnit
-                ? ` / ${bleSnapshot.machineInfo.temperatureUnit}`
-                : ""}
-              {bleSnapshot.machineInfo.waterSource
-                ? ` · ${bleSnapshot.machineInfo.waterSource}`
-                : ""}
-            </p>
-          ) : null}
-        </Panel>
+          </Panel>
+        ) : null}
 
-        {driver === "web-bluetooth" ? (
-          <Panel title={t("settings.machine")}>
-            <p className="mb-3 text-sm text-ink-muted">
-              {t("settings.machineHint")}
-            </p>
-            <div className="mb-3 grid gap-2 sm:grid-cols-2">
-              <Field label={t("settings.weightUnit")}>
-                <Select
-                  value={weightUnit}
-                  onChange={(e) =>
-                    setWeightUnit(e.target.value as "ml" | "g" | "oz")
-                  }
-                  disabled={machineBusy}
-                >
-                  <option value="g">g</option>
-                  <option value="ml">ml</option>
-                  <option value="oz">oz</option>
-                </Select>
-              </Field>
-              <Field label={t("settings.tempUnit")}>
-                <Select
-                  value={tempUnit}
-                  onChange={(e) =>
-                    setTempUnit(e.target.value as "C" | "F")
-                  }
-                  disabled={machineBusy}
-                >
-                  <option value="C">°C</option>
-                  <option value="F">°F</option>
-                </Select>
-              </Field>
-              <Field label={t("settings.waterSource")}>
-                <Select
-                  value={waterSource}
-                  onChange={(e) =>
-                    setWaterSource(e.target.value as "tank" | "tap")
-                  }
-                  disabled={machineBusy}
-                >
-                  <option value="tank">{t("settings.waterTank")}</option>
-                  <option value="tap">{t("settings.waterTap")}</option>
-                </Select>
-              </Field>
-              <Field label={t("settings.display")}>
-                <Select
-                  value={displayLevel}
-                  onChange={(e) =>
-                    setDisplayLevel(
-                      e.target.value as "low" | "medium" | "high",
-                    )
-                  }
-                  disabled={machineBusy}
-                >
-                  <option value="low">{t("settings.displayLow")}</option>
-                  <option value="medium">{t("settings.displayMedium")}</option>
-                  <option value="high">{t("settings.displayHigh")}</option>
-                </Select>
-              </Field>
-            </div>
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={machineBusy}
-              onClick={() => void applyMachineSettings()}
-            >
-              {machineBusy ? "…" : t("settings.applyMachine")}
-            </Button>
-            {machineMsg ? (
-              <Alert
-                tone={machineMsg.startsWith("!") ? "red" : "green"}
-                className="mt-3"
+        {mode !== "static" ? (
+          <Panel
+            title={t("settings.pairingTitle")}
+            action={
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={pairingBusy}
+                onClick={() => void createPairing()}
               >
-                {machineMsg.startsWith("!")
-                  ? machineMsg.slice(1)
-                  : machineMsg}
+                {pairingBusy
+                  ? t("settings.pairingCreating")
+                  : t("settings.pairingCreate")}
+              </Button>
+            }
+          >
+            <p className="mb-3 text-sm text-ink-muted">
+              {t("settings.pairingHint")}
+            </p>
+            <Field label={t("settings.pairingLabelField")} htmlFor="pair-new-label">
+              <TextInput
+                id="pair-new-label"
+                value={pairingLabel}
+                maxLength={128}
+                placeholder={t("settings.pairingLabelPlaceholder")}
+                onChange={(e) => setPairingLabel(e.target.value)}
+                disabled={pairingBusy}
+              />
+            </Field>
+            {pairingError ? (
+              <Alert tone="red" className="mt-3">
+                {pairingError}
               </Alert>
             ) : null}
-          </Panel>
-        ) : null}
-
-        {driver === "bridge" ? (
-          <Panel title={t("settings.bridgeStatus")}>
-            <p className="mb-3 text-sm text-ink-muted">
-              {t("settings.bridgeHint")}
-            </p>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <StatusPill
-                tone={
-                  bridgeSnap?.reachable === true
-                    ? "green"
-                    : bridgeSnap?.reachable === false
-                      ? "red"
-                      : "neutral"
-                }
-              >
-                {bridgeSnap?.reachable === true
-                  ? t("settings.bridgeOnline")
-                  : bridgeSnap?.reachable === false
-                    ? t("settings.bridgeOffline")
-                    : "—"}
-              </StatusPill>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={bridgeBusy}
-                onClick={() => void refreshBridge()}
-              >
-                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-                {t("settings.bridgeRefresh")}
-              </Button>
-            </div>
-            {bridgeSnap?.detail ? (
-              <p className="text-xs text-ink-faint">{bridgeSnap.detail}</p>
-            ) : null}
-            <p className="mt-2 text-xs text-ink-muted">
-              <Link to="/" className="text-brand hover:underline">
-                {t("nav.dashboard")}
-              </Link>
-            </p>
-          </Panel>
-        ) : null}
-
-        <Panel title={t("settings.host")}>
-          <dl className="grid gap-2 text-sm sm:grid-cols-2">
-            <Row label={t("settings.hostMode")} value={mode ?? "-"} />
-            <Row
-              label={t("settings.pairingRequired")}
-              value={config?.pairing_required ? t("settings.yes") : t("settings.no")}
-            />
-            <Row
-              label={t("settings.publicOrigin")}
-              value={config?.public_origin ?? "-"}
-            />
-            <Row
-              label={t("settings.sessionTtl")}
-              value={
-                config ? `${Math.round(config.session_ttl_s / 3600)} h` : "-"
-              }
-            />
-            <Row
-              label={t("settings.thisSession")}
-              value={
-                session
-                  ? `${session.client_label || t("settings.unnamedDevice")} | ${shortId(session.session_id, 10)}`
-                  : mode === "loopback"
-                    ? t("settings.loopbackNoGate")
-                    : "-"
-              }
-            />
-            {session?.expires_at != null ? (
-              <Row
-                label={t("settings.sessionExpires")}
-                value={formatEpochSeconds(session.expires_at)}
-              />
-            ) : null}
-          </dl>
-        </Panel>
-
-        <Panel
-          title={t("settings.pairingTitle")}
-          action={
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={pairingBusy}
-              onClick={() => void createPairing()}
-            >
-              {pairingBusy ? t("settings.pairingCreating") : t("settings.pairingCreate")}
-            </Button>
-          }
-        >
-          <p className="mb-3 text-sm text-ink-muted">
-            {t("settings.pairingHint")}
-          </p>
-          <Field label={t("settings.pairingLabelField")} htmlFor="pair-new-label">
-            <TextInput
-              id="pair-new-label"
-              value={pairingLabel}
-              maxLength={128}
-              placeholder={t("settings.pairingLabelPlaceholder")}
-              onChange={(e) => setPairingLabel(e.target.value)}
-              disabled={pairingBusy}
-            />
-          </Field>
-          {pairingError ? (
-            <Alert tone="red" className="mt-3">
-              {pairingError}
-            </Alert>
-          ) : null}
-          {pairing ? (
-            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
-              <div className="rounded-2xl border border-line bg-surface-2 p-3">
-                <QRCodeSVG
-                  value={pairing.pairing_url}
-                  size={148}
-                  level="M"
-                  includeMargin={false}
-                  aria-label="Pairing QR code"
-                />
-              </div>
-              <div className="min-w-0 flex-1 space-y-2 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusPill tone={expired ? "red" : "amber"}>
-                    {expired
-                      ? t("settings.pairingExpired")
-                      : t("settings.pairingExpiresIn").replace("{time}", expiryLabel ?? "")}
-                  </StatusPill>
-                  <StatusPill tone="neutral">
-                    TTL ~{config?.pairing_ttl_s ?? 300}s
-                  </StatusPill>
+            {pairing ? (
+              <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-start">
+                <div className="rounded-2xl border border-line bg-surface-2 p-3">
+                  <QRCodeSVG
+                    value={pairing.pairing_url}
+                    size={148}
+                    level="M"
+                    includeMargin={false}
+                    aria-label="Pairing QR code"
+                  />
                 </div>
-                <div className="break-all rounded-xl border border-line bg-surface-2 px-2.5 py-2 font-mono text-xs text-ink">
-                  {pairing.pairing_url}
-                </div>
-                <p className="text-xs text-ink-faint">
-                  {t("settings.pairingSingleUse").replace(
-                    "{id}",
-                    shortId(pairing.pairing_id, 12),
-                  )}
-                </p>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setPairing(null)}
-                >
-                  {t("settings.dismiss")}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </Panel>
-
-        <Panel
-          title={t("settings.sessionsTitle")}
-          action={
-            <IconButton label={t("settings.sessionsRefresh")} onClick={() => void loadSessions()}>
-              <RefreshCw className="h-4 w-4" aria-hidden />
-            </IconButton>
-          }
-        >
-          {sessionsError ? (
-            <Alert tone="red" className="mb-3">
-              {sessionsError}
-            </Alert>
-          ) : null}
-          {loadingSessions ? (
-            <Spinner label={t("common.loading")} />
-          ) : sessions.length === 0 ? (
-            <p className="text-sm text-ink-muted">{t("settings.sessionsEmpty")}</p>
-          ) : (
-            <ul className="divide-y divide-line">
-              {sessions.map((s) => (
-                <li
-                  key={s.session_id}
-                  className="flex flex-wrap items-center justify-between gap-2 py-2.5 first:pt-0 last:pb-0"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
-                      <span className="font-medium">
-                        {s.client_label || t("settings.unnamedDevice")}
-                      </span>
-                      {s.current ? (
-                        <StatusPill tone="green">{t("settings.currentSession")}</StatusPill>
-                      ) : null}
-                    </div>
-                    <div className="mt-0.5 text-xs text-ink-faint">
-                      {shortId(s.session_id, 12)}
-                      {s.client_ip ? ` | ${s.client_ip}` : ""}
-                      {s.expires_at != null
-                        ? ` | ${formatEpochSeconds(s.expires_at)}`
-                        : ""}
-                    </div>
+                <div className="min-w-0 flex-1 space-y-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusPill tone={expired ? "red" : "amber"}>
+                      {expired
+                        ? t("settings.pairingExpired")
+                        : t("settings.pairingExpiresIn").replace(
+                            "{time}",
+                            expiryLabel ?? "",
+                          )}
+                    </StatusPill>
+                    <StatusPill tone="neutral">
+                      TTL ~{config?.pairing_ttl_s ?? 300}s
+                    </StatusPill>
                   </div>
+                  <div className="break-all rounded-xl border border-line bg-surface-2 px-2.5 py-2 font-mono text-xs text-ink">
+                    {pairing.pairing_url}
+                  </div>
+                  <p className="text-xs text-ink-faint">
+                    {t("settings.pairingSingleUse").replace(
+                      "{id}",
+                      shortId(pairing.pairing_id, 12),
+                    )}
+                  </p>
                   <Button
                     size="sm"
-                    variant="danger"
-                    onClick={() => void revoke(s.session_id)}
+                    variant="secondary"
+                    onClick={() => setPairing(null)}
                   >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                    {t("settings.revoke")}
+                    {t("settings.dismiss")}
                   </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+                </div>
+              </div>
+            ) : null}
+          </Panel>
+        ) : null}
 
-        <div className="text-xs text-ink-faint">
-          <button
-            type="button"
-            className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
-            onClick={() => void refresh()}
-          >
-            {t("settings.refreshAuth")}
-          </button>
-        </div>
+        <details className="group rounded-2xl border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-medium text-ink-muted hover:text-ink">
+            <span>{t("settings.advancedTitle")}</span>
+            <ChevronDown
+              className="h-4 w-4 text-ink-faint transition-transform group-open:rotate-180"
+              aria-hidden
+            />
+          </summary>
+          <div className="space-y-4 border-t border-line p-4">
+            <Panel title={t("settings.driver")}>
+              <p className="mb-3 text-sm text-ink-muted">
+                {t("settings.driverHint")}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    {
+                      id: "bridge" as MachineDriver,
+                      label: t("settings.bridge"),
+                    },
+                    {
+                      id: "web-bluetooth" as MachineDriver,
+                      label: t("settings.webBle"),
+                    },
+                  ] as const
+                ).map((opt) => {
+                  const active = driver === opt.id;
+                  return (
+                    <Button
+                      key={opt.id}
+                      size="sm"
+                      variant={active ? "primary" : "secondary"}
+                      onClick={() => setDriver(opt.id)}
+                    >
+                      {opt.label}
+                    </Button>
+                  );
+                })}
+              </div>
+              <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                <Row label={t("settings.activeDriver")} value={driver} />
+                <Row
+                  label={t("settings.webBleAvail")}
+                  value={
+                    webBluetooth.usable
+                      ? t("settings.available")
+                      : webBluetooth.reason ?? t("settings.unavailable")
+                  }
+                />
+                <Row
+                  label={t("settings.bleSession")}
+                  value={tPhase(bleSnapshot.phase)}
+                />
+                <Row
+                  label={t("dashboard.device")}
+                  value={
+                    bleSnapshot.deviceName ||
+                    bleSnapshot.deviceId ||
+                    (driver === "web-bluetooth"
+                      ? t("dashboard.notConnected")
+                      : "—")
+                  }
+                />
+                <Row
+                  label={t("dashboard.phase")}
+                  value={
+                    bleSnapshot.machineStateName
+                      ? tStatus(bleSnapshot.machineStateName)
+                      : "—"
+                  }
+                />
+                <Row
+                  label={t("dashboard.cup")}
+                  value={
+                    bleSnapshot.cupWeightG != null
+                      ? `${bleSnapshot.cupWeightG} g`
+                      : "—"
+                  }
+                />
+                <Row
+                  label={t("dashboard.water")}
+                  value={
+                    bleSnapshot.dispensedWaterMl != null
+                      ? `${bleSnapshot.dispensedWaterMl} ml`
+                      : "—"
+                  }
+                />
+              </dl>
+              {driver === "web-bluetooth" ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {bleSnapshot.phase === "connecting" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={bleBusy}
+                      onClick={() => {
+                        bleSession.abortConnect();
+                        setBleBusy(false);
+                        setBleActionError(null);
+                      }}
+                    >
+                      {t("settings.cancelConnecting")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={bleBusy}
+                      onClick={() => {
+                        setBleActionError(null);
+                        setBleBusy(true);
+                        void connectBle()
+                          .catch((e) =>
+                            setBleActionError(
+                              e instanceof Error ? e.message : String(e),
+                            ),
+                          )
+                          .finally(() => setBleBusy(false));
+                      }}
+                    >
+                      <Bluetooth className="h-3.5 w-3.5" aria-hidden />
+                      {bleSnapshot.phase === "connected"
+                        ? t("settings.reconnect")
+                        : bleSnapshot.hasPairedDevice
+                          ? t("dashboard.connectRemembered")
+                          : t("settings.connect")}
+                    </Button>
+                  )}
+                  {bleSnapshot.hasPairedDevice &&
+                  bleSnapshot.phase !== "connecting" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={bleBusy}
+                      onClick={() => {
+                        setBleActionError(null);
+                        setBleBusy(true);
+                        void connectBle({ forcePicker: true })
+                          .catch((e) =>
+                            setBleActionError(
+                              e instanceof Error ? e.message : String(e),
+                            ),
+                          )
+                          .finally(() => setBleBusy(false));
+                      }}
+                    >
+                      {t("dashboard.pickOtherDevice")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={
+                      bleBusy ||
+                      bleSnapshot.phase === "idle" ||
+                      bleSnapshot.phase === "disconnected" ||
+                      bleSnapshot.phase === "connecting"
+                    }
+                    onClick={() => {
+                      setBleBusy(true);
+                      setBleActionError(null);
+                      void disconnectBle()
+                        .catch((e) =>
+                          setBleActionError(
+                            e instanceof Error ? e.message : String(e),
+                          ),
+                        )
+                        .finally(() => setBleBusy(false));
+                    }}
+                  >
+                    {t("settings.disconnect")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={bleBusy || bleSnapshot.phase === "connecting"}
+                    onClick={() => {
+                      setBleBusy(true);
+                      setBleActionError(null);
+                      void bleSession
+                        .forgetDevice()
+                        .catch((e) =>
+                          setBleActionError(
+                            e instanceof Error ? e.message : String(e),
+                          ),
+                        )
+                        .finally(() => setBleBusy(false));
+                    }}
+                  >
+                    {t("settings.forgetDevice")}
+                  </Button>
+                </div>
+              ) : null}
+              {bleSnapshot.lastError || bleActionError ? (
+                <Alert tone="red" className="mt-3">
+                  {bleActionError ?? bleSnapshot.lastError}
+                </Alert>
+              ) : null}
+              {driver === "web-bluetooth" && !webBluetooth.usable ? (
+                <Alert tone="amber" className="mt-3">
+                  {webBluetooth.reason}
+                </Alert>
+              ) : null}
+              {bleSnapshot.machineInfo?.serialNumber ? (
+                <p className="mt-3 text-xs text-ink-muted">
+                  SN {bleSnapshot.machineInfo.serialNumber}
+                  {bleSnapshot.machineInfo.firmware
+                    ? ` · ${bleSnapshot.machineInfo.firmware}`
+                    : ""}
+                  {bleSnapshot.machineInfo.weightUnit
+                    ? ` · ${bleSnapshot.machineInfo.weightUnit}`
+                    : ""}
+                  {bleSnapshot.machineInfo.temperatureUnit
+                    ? ` / ${bleSnapshot.machineInfo.temperatureUnit}`
+                    : ""}
+                  {bleSnapshot.machineInfo.waterSource
+                    ? ` · ${bleSnapshot.machineInfo.waterSource}`
+                    : ""}
+                </p>
+              ) : null}
+            </Panel>
+
+            {driver === "bridge" ? (
+              <Panel title={t("settings.bridgeStatus")}>
+                <p className="mb-3 text-sm text-ink-muted">
+                  {t("settings.bridgeHint")}
+                </p>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <StatusPill
+                    tone={
+                      bridgeSnap?.reachable === true
+                        ? "green"
+                        : bridgeSnap?.reachable === false
+                          ? "red"
+                          : "neutral"
+                    }
+                  >
+                    {bridgeSnap?.reachable === true
+                      ? t("settings.bridgeOnline")
+                      : bridgeSnap?.reachable === false
+                        ? t("settings.bridgeOffline")
+                        : "—"}
+                  </StatusPill>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={bridgeBusy}
+                    onClick={() => void refreshBridge()}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                    {t("settings.bridgeRefresh")}
+                  </Button>
+                </div>
+                {bridgeSnap?.detail ? (
+                  <p className="text-xs text-ink-faint">{bridgeSnap.detail}</p>
+                ) : null}
+              </Panel>
+            ) : null}
+
+            {mode !== "static" ? (
+              <>
+                <Panel title={t("settings.host")}>
+                  <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                    <Row label={t("settings.hostMode")} value={mode ?? "-"} />
+                    <Row
+                      label={t("settings.pairingRequired")}
+                      value={
+                        config?.pairing_required
+                          ? t("settings.yes")
+                          : t("settings.no")
+                      }
+                    />
+                    <Row
+                      label={t("settings.publicOrigin")}
+                      value={config?.public_origin ?? "-"}
+                    />
+                    <Row
+                      label={t("settings.sessionTtl")}
+                      value={
+                        config
+                          ? `${Math.round(config.session_ttl_s / 3600)} h`
+                          : "-"
+                      }
+                    />
+                    <Row
+                      label={t("settings.thisSession")}
+                      value={
+                        session
+                          ? `${session.client_label || t("settings.unnamedDevice")} | ${shortId(session.session_id, 10)}`
+                          : mode === "loopback"
+                            ? t("settings.loopbackNoGate")
+                            : "-"
+                      }
+                    />
+                    {session?.expires_at != null ? (
+                      <Row
+                        label={t("settings.sessionExpires")}
+                        value={formatEpochSeconds(session.expires_at)}
+                      />
+                    ) : null}
+                  </dl>
+                </Panel>
+
+                <Panel
+                  title={t("settings.sessionsTitle")}
+                  action={
+                    <IconButton
+                      label={t("settings.sessionsRefresh")}
+                      onClick={() => void loadSessions()}
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden />
+                    </IconButton>
+                  }
+                >
+                  {sessionsError ? (
+                    <Alert tone="red" className="mb-3">
+                      {sessionsError}
+                    </Alert>
+                  ) : null}
+                  {loadingSessions ? (
+                    <Spinner label={t("common.loading")} />
+                  ) : sessions.length === 0 ? (
+                    <p className="text-sm text-ink-muted">
+                      {t("settings.sessionsEmpty")}
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-line">
+                      {sessions.map((s) => (
+                        <li
+                          key={s.session_id}
+                          className="flex flex-wrap items-center justify-between gap-2 py-2.5 first:pt-0 last:pb-0"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
+                              <span className="font-medium">
+                                {s.client_label || t("settings.unnamedDevice")}
+                              </span>
+                              {s.current ? (
+                                <StatusPill tone="green">
+                                  {t("settings.currentSession")}
+                                </StatusPill>
+                              ) : null}
+                            </div>
+                            <div className="mt-0.5 text-xs text-ink-faint">
+                              {shortId(s.session_id, 12)}
+                              {s.client_ip ? ` | ${s.client_ip}` : ""}
+                              {s.expires_at != null
+                                ? ` | ${formatEpochSeconds(s.expires_at)}`
+                                : ""}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => void revoke(s.session_id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                            {t("settings.revoke")}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Panel>
+              </>
+            ) : null}
+
+            <div className="text-xs text-ink-faint">
+              <button
+                type="button"
+                className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
+                onClick={() => void refresh()}
+              >
+                {t("settings.refreshAuth")}
+              </button>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   );

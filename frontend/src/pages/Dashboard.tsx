@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Beaker,
+  ChevronDown,
   Pause,
   Play,
   RefreshCw,
@@ -97,8 +98,15 @@ type EventsPollOpts = {
 
 export default function Dashboard() {
   const { t, tPhase, tStatus, tMachineOrPhase } = useI18n();
-  const { driver, bleSnapshot, bleSession, connectBle, disconnectBle } =
-    useMachine();
+  const {
+    driver,
+    setDriver,
+    webBluetooth,
+    bleSnapshot,
+    bleSession,
+    connectBle,
+    disconnectBle,
+  } = useMachine();
   const webBle = driver === "web-bluetooth";
   const staticDeploy = isStaticDeploy();
   const [bridge, setBridge] = useState<BridgeState | null>(null);
@@ -728,6 +736,57 @@ export default function Dashboard() {
       : null);
 
   const completed = bleSnapshot.lastCompletedBrew;
+  const handleBleReleaseClick = useCallback(() => {
+    void disconnectBle().catch((e) =>
+      setActionError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [disconnectBle]);
+
+  const handleInlineBleConnect = useCallback(() => {
+    setActionError(null);
+    setActionGuidance(null);
+    setDriver("web-bluetooth");
+    void bleSession.connect().catch((e) =>
+      setActionError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [bleSession, setDriver]);
+
+  const bridgeTel =
+    bridge?.telemetry && typeof bridge.telemetry === "object"
+      ? (bridge.telemetry as Record<string, unknown>)
+      : null;
+  const bridgeTargets =
+    bridge?.targets && typeof bridge.targets === "object"
+      ? (bridge.targets as Record<string, unknown>)
+      : null;
+  const bridgeProgress =
+    bridge?.liquid_progress && typeof bridge.liquid_progress === "object"
+      ? (bridge.liquid_progress as Record<string, unknown>)
+      : null;
+  const bridgeWaterMl =
+    pickNumber(bridgeProgress, ["dispensed_water_ml", "water_ml"]) ??
+    pickNumber(bridgeTel, [
+      "water_peak_ml",
+      "water_ml",
+      "dispensed_water_peak_ml",
+      "dispensed_water_ml",
+    ]);
+  const bridgeTargetMl =
+    pickNumber(bridgeProgress, ["target_dispensed_water_ml"]) ??
+    pickNumber(bridgeTargets, ["target_dispensed_water_ml", "volume_ml"]);
+  const bridgeCupG =
+    pickNumber(bridgeProgress, ["cup_delta_g"]) ??
+    pickNumber(bridgeTel, ["cup_delta_peak_g", "coffee_g", "cup_weight_g"]);
+  const summaryObj =
+    summary && typeof summary === "object"
+      ? (summary as Record<string, unknown>)
+      : null;
+  const bridgeTitle =
+    asTrimmedString(summaryObj?.recipe_name) ||
+    asTrimmedString(summaryObj?.name) ||
+    bridge?.machine ||
+    t("dashboard.studioMachine");
+
   const openRebrew = (revisionId: string | null, name: string | null) => {
     const entry = findLocalRecipeForRebrew({
       recipe_revision_id: revisionId,
@@ -1068,13 +1127,7 @@ export default function Dashboard() {
                   variant="secondary"
                   size="sm"
                   disabled={actionBusy !== null}
-                  onClick={() => {
-                    void disconnectBle().catch((e) =>
-                      setActionError(
-                        e instanceof Error ? e.message : String(e),
-                      ),
-                    );
-                  }}
+                  onClick={handleBleReleaseClick}
                 >
                   {t("dashboard.disconnect")}
                 </Button>
@@ -1237,7 +1290,7 @@ export default function Dashboard() {
       {driver === "bridge" || Boolean(trackedId) || recoveryRequired || staleMismatch ? (
         <>
           <Panel
-            title={t("dashboard.bridgePanel")}
+            title={t("dashboard.studioMachine")}
             action={
               observeHealth !== "ok" ? (
                 <StatusPill tone={observeHealth === "offline" ? "red" : "amber"}>
@@ -1251,19 +1304,26 @@ export default function Dashboard() {
             {loading && !bridge ? (
               <Spinner label={t("common.loading")} />
             ) : bridge ? (
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-1.5">
-                  <StatusPill tone={bridge.running ? "green" : "red"}>
-                    {bridge.running
-                      ? t("dashboard.daemonRunning")
-                      : t("dashboard.daemonStopped")}
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <StatusPill tone={bridge.running ? "blue" : "red"}>
+                    {t("dashboard.connectionChipBridge")}
                   </StatusPill>
-                  <StatusPill tone={bridge.connected ? "green" : "neutral"}>
+                  <StatusPill
+                    tone={
+                      bridge.connected
+                        ? "green"
+                        : bridge.running
+                          ? "neutral"
+                          : "red"
+                    }
+                  >
                     {bridge.connected
                       ? t("dashboard.machineLinked")
-                      : t("dashboard.machineNotLinked")}
+                      : bridge.running
+                        ? t("dashboard.readyToBrew")
+                        : t("settings.bridgeOffline")}
                   </StatusPill>
-                  <StatusPill tone="blue">{connectionScope}</StatusPill>
                   {recoveryRequired ? (
                     <StatusPill tone="amber">{t("dashboard.recovery")}</StatusPill>
                   ) : null}
@@ -1271,91 +1331,111 @@ export default function Dashboard() {
                     <StatusPill tone="amber">{t("dashboard.bleReleasePending")}</StatusPill>
                   ) : null}
                 </div>
-                <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                  <FieldRow label={t("history.machine")} value={bridge.machine ?? "-"} />
-                  <FieldRow
-                    label="Firmware"
-                    value={asTrimmedString(bridge.firmware) ?? "-"}
-                  />
-                  <FieldRow label={t("dashboard.connScope")} value={connectionScope} />
-                  <FieldRow label={t("history.source")} value={workflowSource} />
-                  <FieldRow
-                    label={t("dashboard.recovery")}
-                    value={
-                      recoveryRequired ? "required" : recovery ? "clear" : "-"
-                    }
-                  />
-                  <FieldRow
-                    label={t("dashboard.lastBleRelease")}
-                    value={formatDisconnect(bridge)}
-                  />
-                  {bridge.last_disconnect_error ? (
-                    <FieldRow
-                      label={t("dashboard.bleReleaseFailed")}
-                      value={String(bridge.last_disconnect_error)}
-                    />
-                  ) : null}
-                  <FieldRow
-                    label={t("dashboard.phase")}
-                    value={tMachineOrPhase(asTrimmedString(bridge.activity), phase)}
-                  />
-                  <FieldRow
-                    label={t("dashboard.instance")}
-                    value={
-                      asTrimmedString(bridge.instance_id)
-                        ? shortId(String(bridge.instance_id), 12)
-                        : "-"
-                    }
-                  />
-                </dl>
-                {bridge.last_error ? (
-                  <Alert tone="amber">
-                    {String(bridge.last_error)}
-                  </Alert>
-                ) : null}
-                {!bridge.running ? (
-                  <p className="text-xs leading-relaxed text-ink-muted">
-                    {t("dashboard.bridgeDown")}
-                  </p>
-                ) : null}
-              </div>
-            ) : (
-              <EmptyMachineHint />
-            )}
-          </Panel>
 
-          <Panel title={t("dashboard.workflowTitle")} className="mt-4">
-            {!trackedId ? (
-              <p className="text-sm text-ink-muted">
-                {t("dashboard.noWorkflow")}
-              </p>
-            ) : (
-              <div className="space-y-4">
-                <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                  <FieldRow label={t("history.workflow")} value={shortId(trackedId, 18)} />
-                  <FieldRow label={t("recipes.kind")} value={displayKind} />
-                  <FieldRow
-                    label={t("dashboard.phase")}
-                    value={
-                      asTrimmedString(summary?.state) ??
-                      finalSummary.result ??
-                      phase ??
-                      "-"
-                    }
-                  />
-                  <FieldRow
-                    label={t("history.revision")}
-                    value={
-                      displayRevision ? shortId(String(displayRevision), 12) : "-"
-                    }
-                  />
-                </dl>
-                <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] break-all text-ink">
-                  {trackedId}
+                <div className="overflow-hidden rounded-2xl bg-surface-2">
+                  <div className="flex flex-col items-center px-4 pb-2 pt-6">
+                    <img
+                      src={`${import.meta.env.BASE_URL}studio-machine-close.webp`}
+                      alt="xBloom Studio"
+                      className="h-40 w-auto object-contain opacity-95 drop-shadow-[0_16px_40px_rgba(0,0,0,0.55)] sm:h-48"
+                      draggable={false}
+                    />
+                    <div className="mt-3 text-center">
+                      <div className="text-sm font-semibold tracking-tight text-ink">
+                        {bridgeTitle}
+                      </div>
+                      <div className="mt-0.5 text-xs text-ink-faint">
+                        {tMachineOrPhase(
+                          asTrimmedString(bridge.activity) ||
+                            asTrimmedString(bridge.machine_state),
+                          phase,
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 border-t border-line px-4 py-5">
+                    <MatrixReadout
+                      label={t("dashboard.cup")}
+                      value={
+                        bridgeCupG != null ? bridgeCupG.toFixed(1) : "—"
+                      }
+                      unit={bridgeCupG != null ? "g" : undefined}
+                    />
+                    <MatrixReadout
+                      label={t("dashboard.water")}
+                      value={
+                        bridgeWaterMl != null
+                          ? String(Math.round(bridgeWaterMl))
+                          : "—"
+                      }
+                      unit={bridgeWaterMl != null ? "ml" : undefined}
+                    />
+                  </div>
+                  {bridgeTargetMl != null && bridgeWaterMl != null ? (
+                    <div className="border-t border-line px-4 py-3">
+                      <div className="mb-1.5 flex items-center justify-between text-[11px] text-ink-muted">
+                        <span>{t("dashboard.workflowProgress")}</span>
+                        <span className="tabular-nums">
+                          {Math.min(
+                            100,
+                            Math.round(
+                              (bridgeWaterMl / Math.max(1, bridgeTargetMl)) *
+                                100,
+                            ),
+                          )}
+                          %
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+                        <div
+                          className="h-full rounded-full bg-brand transition-[width] duration-300"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(
+                                (bridgeWaterMl / Math.max(1, bridgeTargetMl)) *
+                                  100,
+                              ),
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
+                {!trackedId ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <p className="text-xs leading-relaxed text-ink-muted">
+                      {bridge.running
+                        ? t("dashboard.linkStudioHint")
+                        : t("dashboard.bridgeDown")}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Link
+                        to="/recipes"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-full bg-brand px-3.5 text-xs font-medium text-paper hover:brightness-110"
+                      >
+                        <Beaker className="h-3.5 w-3.5" aria-hidden />
+                        {t("dashboard.pickRecipe")}
+                      </Link>
+                      {webBluetooth.usable && !bridge.connected ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={actionBusy !== null}
+                          onClick={handleInlineBleConnect}
+                        >
+                          {t("dashboard.connectBleInline")}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
                 {/* Controls hidden until stale active-workflow is acknowledged. */}
-                {!staleMismatch &&
+                {trackedId &&
+                !staleMismatch &&
                 controlResolution.controlId &&
                 (!durableTerminal || recoveryRequired) ? (
                   <div className="flex flex-wrap gap-2">
@@ -1414,9 +1494,7 @@ export default function Dashboard() {
                   </div>
                 ) : null}
 
-                <TelemetryBlock bridge={bridge} />
-
-                {durableTerminal ? (
+                {trackedId && durableTerminal ? (
                   <FinalSummaryPanel
                     summary={finalSummary}
                     release={release}
@@ -1424,10 +1502,124 @@ export default function Dashboard() {
                   />
                 ) : null}
 
-                <EventTimeline events={events} />
+                {bridge.last_error ? (
+                  <Alert tone="amber">
+                    {String(bridge.last_error)}
+                  </Alert>
+                ) : null}
               </div>
+            ) : (
+              <EmptyMachineHint />
             )}
           </Panel>
+
+          {bridge ? (
+            <details
+              className="group mt-4 rounded-2xl border border-line bg-surface"
+              open={recoveryRequired || undefined}
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-xs font-medium text-ink-muted hover:text-ink">
+                <span className="flex items-center gap-2">
+                  <span>{t("dashboard.diagnosticsToggle")}</span>
+                  <StatusPill tone="blue">{connectionScope}</StatusPill>
+                  {events.length > 0 ? (
+                    <span className="tabular-nums text-[11px] text-ink-faint">
+                      ({events.length})
+                    </span>
+                  ) : null}
+                </span>
+                <ChevronDown
+                  className="h-4 w-4 text-ink-faint transition-transform group-open:rotate-180"
+                  aria-hidden
+                />
+              </summary>
+              <div className="space-y-4 border-t border-line px-4 pb-4 pt-3">
+                <div className="flex flex-wrap gap-1.5">
+                  <StatusPill tone={bridge.running ? "green" : "red"}>
+                    {bridge.running
+                      ? t("dashboard.daemonRunning")
+                      : t("dashboard.daemonStopped")}
+                  </StatusPill>
+                  <StatusPill tone={bridge.connected ? "green" : "neutral"}>
+                    {bridge.connected
+                      ? t("dashboard.machineLinked")
+                      : t("dashboard.machineNotLinked")}
+                  </StatusPill>
+                  <StatusPill tone="blue">{connectionScope}</StatusPill>
+                </div>
+                <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                  <FieldRow label={t("history.machine")} value={bridge.machine ?? "-"} />
+                  <FieldRow
+                    label="Firmware"
+                    value={asTrimmedString(bridge.firmware) ?? "-"}
+                  />
+                  <FieldRow label={t("dashboard.connScope")} value={connectionScope} />
+                  <FieldRow label={t("history.source")} value={workflowSource} />
+                  <FieldRow
+                    label={t("dashboard.recovery")}
+                    value={
+                      recoveryRequired ? "required" : recovery ? "clear" : "-"
+                    }
+                  />
+                  <FieldRow
+                    label={t("dashboard.lastBleRelease")}
+                    value={formatDisconnect(bridge)}
+                  />
+                  {bridge.last_disconnect_error ? (
+                    <FieldRow
+                      label={t("dashboard.bleReleaseFailed")}
+                      value={String(bridge.last_disconnect_error)}
+                    />
+                  ) : null}
+                  <FieldRow
+                    label={t("dashboard.phase")}
+                    value={tMachineOrPhase(asTrimmedString(bridge.activity), phase)}
+                  />
+                  <FieldRow
+                    label={t("dashboard.instance")}
+                    value={
+                      asTrimmedString(bridge.instance_id)
+                        ? shortId(String(bridge.instance_id), 12)
+                        : "-"
+                    }
+                  />
+                </dl>
+
+                {trackedId ? (
+                  <div className="space-y-3 border-t border-line pt-3">
+                    <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                      <FieldRow label={t("history.workflow")} value={shortId(trackedId, 18)} />
+                      <FieldRow label={t("recipes.kind")} value={displayKind} />
+                      <FieldRow
+                        label={t("dashboard.phase")}
+                        value={
+                          asTrimmedString(summary?.state) ??
+                          finalSummary.result ??
+                          phase ??
+                          "-"
+                        }
+                      />
+                      <FieldRow
+                        label={t("history.revision")}
+                        value={
+                          displayRevision ? shortId(String(displayRevision), 12) : "-"
+                        }
+                      />
+                    </dl>
+                    <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] break-all text-ink">
+                      {trackedId}
+                    </div>
+                    <TelemetryBlock bridge={bridge} />
+                    <EventTimeline events={events} />
+                  </div>
+                ) : (
+                  <p className="text-xs text-ink-muted">
+                    {t("dashboard.noWorkflow")}
+                  </p>
+                )}
+              </div>
+            </details>
+          ) : null}
         </>
       ) : null}
 

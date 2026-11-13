@@ -677,3 +677,97 @@ def test_recipes_module_uses_shared_public_contract() -> None:
     # Local duplicates removed.
     assert "class SafeValidationRoute" not in recipes_src
     assert "def reject_browser_unsafe_payload" not in recipes_src
+
+
+
+# ---------------------------------------------------------------------------
+# Standalone hot-water route: strict typed schema & validation
+# ---------------------------------------------------------------------------
+
+
+def test_openapi_water_start_schema_is_strict_and_path_free(
+    client: TestClient,
+) -> None:
+    schema_doc = client.get("/openapi.json").json()
+    op = schema_doc["paths"]["/api/device/water/start"]["post"]
+    req_schema = op["requestBody"]["content"]["application/json"]["schema"]
+    if "$ref" in req_schema:
+        name = req_schema["$ref"].rsplit("/", 1)[-1]
+        req_schema = schema_doc["components"]["schemas"][name]
+    assert req_schema.get("additionalProperties") is False
+    props = req_schema.get("properties") or {}
+    for forbidden in ("path", "recipe_path", "recipe"):
+        assert forbidden not in props
+    for required_prop in ("volume_ml", "temp_c", "confirmation", "request_id"):
+        assert required_prop in props
+
+
+def test_water_start_forwards_validated_args_and_rejects_invalid_inputs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bridge_client as bc
+
+    captured: list[dict[str, object]] = []
+
+    def fake_water_start(**kwargs):
+        captured.append(kwargs)
+        return {"workflow_id": "wf_water_1", "phase": "brewing"}
+
+    monkeypatch.setattr(bc, "water_start", fake_water_start)
+
+    res_hot = client.post(
+        "/api/device/water/start",
+        json={
+            "volume_ml": 150,
+            "temp_c": 92,
+            "confirmation": "vessel-water-clear",
+            "request_id": "req-water-hot",
+            "flow_ml_s": 3.2,
+            "pattern": "spiral",
+            "water_source": "tank",
+        },
+    )
+    assert res_hot.status_code == 200
+    assert res_hot.json()["workflow_id"] == "wf_water_1"
+    assert captured[-1]["volume_ml"] == 150
+    assert captured[-1]["temp_c"] == 92
+    assert captured[-1]["flow_ml_s"] == 3.2
+    assert captured[-1]["pattern"] == "spiral"
+    assert captured[-1]["water_source"] == "tank"
+
+    res_rt = client.post(
+        "/api/device/water/start",
+        json={
+            "volume_ml": 60,
+            "temp_c": 20,
+            "confirmation": "vessel-water-clear",
+            "request_id": "req-water-rt",
+        },
+    )
+    assert res_rt.status_code == 200
+    assert captured[-1]["temp_c"] == 20
+
+    res_bad_temp = client.post(
+        "/api/device/water/start",
+        json={
+            "volume_ml": 100,
+            "temp_c": 30,
+            "confirmation": "vessel-water-clear",
+            "request_id": "req-water-bad",
+        },
+    )
+    assert res_bad_temp.status_code == 422
+
+    secret = "C:/Users/secret/water.yaml"
+    res_extra = client.post(
+        "/api/device/water/start",
+        json={
+            "volume_ml": 100,
+            "temp_c": 92,
+            "confirmation": "vessel-water-clear",
+            "request_id": "req-water-extra",
+            "path": secret,
+        },
+    )
+    assert res_extra.status_code == 422
+    assert secret not in res_extra.text

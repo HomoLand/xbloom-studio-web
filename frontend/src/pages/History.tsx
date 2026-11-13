@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Cloud, Download, Play, Trash2 } from "lucide-react";
+import { api } from "../api";
 import {
   BrewConfirmDialog,
   type BrewTarget,
@@ -18,20 +19,22 @@ import {
   PageHeader,
   Panel,
   Segmented,
+  Select,
   StatusPill,
   TextInput,
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
+import { isStaticDeploy } from "../lib/deploy";
 import {
   clearLocalHistory,
   exportHistoryCsv,
   exportHistoryJson,
   filterLocalHistory,
   getLocalHistoryEvent,
-  historyStatus,
   importCloudBrewRecords,
   listLocalHistory,
+  mergeHostAndLocalHistory,
   type LocalHistoryEvent,
   type TelemetrySample,
 } from "../lib/localHistory";
@@ -59,9 +62,9 @@ const OUTCOME_TONE: Record<
 export default function History() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const staticDeploy = isStaticDeploy();
   const [events, setEvents] = useState<LocalHistoryEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -70,26 +73,46 @@ export default function History() {
   const [outcomeFilter, setOutcomeFilter] = useState<
     "all" | "completed" | "failed"
   >("all");
+  const [sourceFilter, setSourceFilter] = useState<
+    "all" | "host" | "web-bluetooth" | "app-cloud"
+  >("all");
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
 
-  const reload = useCallback(() => {
-    setEvents(listLocalHistory(200));
-    setTick((n) => n + 1);
-  }, []);
+  const reload = useCallback(async () => {
+    const local = listLocalHistory(200);
+    setEvents(local);
+    if (staticDeploy) return;
+    try {
+      const host = await api.historyList(100);
+      setEvents(mergeHostAndLocalHistory(host.events ?? [], local));
+    } catch {
+      /* keep local list when offline or unauthenticated */
+    }
+  }, [staticDeploy]);
 
   useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
-  const status = useMemo(() => historyStatus(), [tick, events]);
+  const status = useMemo(() => {
+    const by_outcome: Record<string, number> = {};
+    const by_source: Record<string, number> = {};
+    for (const e of events) {
+      by_outcome[e.outcome] = (by_outcome[e.outcome] ?? 0) + 1;
+      by_source[e.source] = (by_source[e.source] ?? 0) + 1;
+    }
+    return { total: events.length, by_outcome, by_source };
+  }, [events]);
+
   const filtered = useMemo(
     () =>
       filterLocalHistory(events, {
         query,
         kind: kindFilter,
         outcome: outcomeFilter,
+        source: sourceFilter,
       }),
-    [events, query, kindFilter, outcomeFilter],
+    [events, query, kindFilter, outcomeFilter, sourceFilter],
   );
   const selected = selectedId
     ? getLocalHistoryEvent(selectedId) ??
@@ -284,6 +307,23 @@ export default function History() {
             { value: "failed", label: t("history.failed") },
           ]}
         />
+        <Select
+          aria-label={t("history.filterSource")}
+          className="sm:w-36"
+          value={sourceFilter}
+          onChange={(e) =>
+            setSourceFilter(
+              e.target.value as "all" | "host" | "web-bluetooth" | "app-cloud",
+            )
+          }
+        >
+          <option value="all">{t("history.sourceAll")}</option>
+          {!staticDeploy ? (
+            <option value="host">{t("history.sourceHost")}</option>
+          ) : null}
+          <option value="web-bluetooth">{t("history.sourceBle")}</option>
+          <option value="app-cloud">{t("history.sourceCloud")}</option>
+        </Select>
         <span className="text-xs text-ink-faint">
           {t("history.showing")
             .replace("{n}", String(filtered.length))
@@ -328,8 +368,14 @@ export default function History() {
                             {t("history.cloudBadge")}
                           </StatusPill>
                         ) : e.source === "web-bluetooth" ? (
-                          <StatusPill tone="green">web-ble</StatusPill>
-                        ) : null}
+                          <StatusPill tone="green">
+                            {t("history.sourceBle")}
+                          </StatusPill>
+                        ) : (
+                          <StatusPill tone="blue">
+                            {t("history.sourceHost")}
+                          </StatusPill>
+                        )}
                         <span className="truncate text-sm font-medium text-ink">
                           {e.recipe_name || shortId(e.event_id, 10)}
                         </span>

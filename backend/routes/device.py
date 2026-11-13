@@ -15,7 +15,8 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import bridge_client as bc
 from public_contract import (
@@ -191,6 +192,41 @@ class ConnectBody(StrictDeviceBody):
 class ProbeBody(StrictDeviceBody):
     address: str | None = None
     scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
+
+
+class WaterStartBody(StrictDeviceBody):
+    volume_ml: int = Field(ge=20, le=360)
+    temp_c: int
+    confirmation: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
+    flow_ml_s: float = Field(default=3.5, ge=3.0, le=3.5)
+    pattern: Literal["center", "spiral", "circular", "ring"] = "center"
+    water_source: Literal["auto", "tank", "tap"] = "auto"
+    address: str | None = None
+    scan_timeout: float = Field(default=8.0, ge=1.0, le=60.0)
+
+    @field_validator("temp_c")
+    @classmethod
+    def _validate_temp_c(cls, value: int) -> int:
+        if value != 20 and not (40 <= value <= 98):
+            raise ValueError("temp_c must be 20 (room temperature) or between 40 and 98")
+        return value
+
+    @field_validator("confirmation", "request_id")
+    @classmethod
+    def _validate_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+    @field_validator("flow_ml_s")
+    @classmethod
+    def _validate_flow_step(cls, value: float) -> float:
+        rounded = round(float(value), 1)
+        if abs(float(value) - rounded) > 1e-6:
+            raise ValueError("flow_ml_s must be in 0.1 ml/s increments")
+        return rounded
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +487,27 @@ async def recovery_reconcile(body: RecoveryBody) -> dict[str, Any]:
             await _to_thread(
                 bc.recovery_reconcile,
                 workflow_id=body.workflow_id,
+                address=body.address,
+                scan_timeout=float(body.scan_timeout),
+            )
+        )
+    except BridgeError as exc:
+        _raise_bridge_http(exc)
+
+
+@router.post("/water/start")
+async def water_start(body: WaterStartBody) -> dict[str, Any]:
+    try:
+        return _public(
+            await _to_thread(
+                bc.water_start,
+                volume_ml=int(body.volume_ml),
+                temp_c=int(body.temp_c),
+                confirmation=body.confirmation,
+                flow_ml_s=float(body.flow_ml_s),
+                pattern=body.pattern,
+                water_source=body.water_source,
+                request_id=body.request_id,
                 address=body.address,
                 scan_timeout=float(body.scan_timeout),
             )

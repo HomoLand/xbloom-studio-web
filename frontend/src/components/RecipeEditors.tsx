@@ -47,16 +47,73 @@ function whole(v: string, fallback: number): number {
   return Math.round(n);
 }
 
-function tempInputValue(t: TempValue | undefined): string {
-  if (t === undefined || t === null) return "";
-  return String(t);
-}
+function TempInputField({
+  id,
+  value,
+  onChange,
+  disabled,
+  allowOptional = false,
+}: {
+  id?: string;
+  value: TempValue | undefined;
+  onChange: (next: TempValue | undefined) => void;
+  disabled?: boolean;
+  allowOptional?: boolean;
+}) {
+  const { t } = useI18n();
+  const mode = value === "RT" ? "RT" : value === "BP" ? "BP" : "num";
+  const pillCls = (active: boolean) =>
+    `h-9 rounded-xl px-2.5 text-xs font-medium transition-colors ${
+      active
+        ? "bg-brand text-paper"
+        : "border border-line bg-surface text-ink-muted hover:text-ink"
+    }`;
 
-function parseTemp(raw: string): TempValue {
-  const t = raw.trim().toUpperCase();
-  if (t === "RT" || t === "BP") return t;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 92;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(allowOptional && mode === "RT" ? undefined : "RT")}
+        className={pillCls(mode === "RT")}
+      >
+        {t("editor.tempRoom")}
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange(allowOptional && mode === "BP" ? undefined : "BP")}
+        className={pillCls(mode === "BP")}
+      >
+        {t("editor.tempBoiling")}
+      </button>
+      <TextInput
+        id={id}
+        type="number"
+        min={40}
+        max={98}
+        step={1}
+        placeholder={t("editor.tempCustom")}
+        value={typeof value === "number" ? value : ""}
+        disabled={disabled}
+        className="min-w-14 flex-1"
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") {
+            if (allowOptional) onChange(undefined);
+            return;
+          }
+          const parsed = Math.round(Number(raw));
+          if (Number.isFinite(parsed)) onChange(parsed);
+        }}
+        onFocus={() => {
+          if (!allowOptional && (value === "RT" || value === "BP")) {
+            onChange(92);
+          }
+        }}
+      />
+    </div>
+  );
 }
 
 /** RPM: center pattern requires 0 only; otherwise 60-120 in steps of 10. */
@@ -163,6 +220,55 @@ export function CoffeeEditor({
   };
 
   const isFlash = value.kind === "flash-brew";
+  const pourTargetMl = isFlash
+    ? Math.max(0, Math.round(value.hot_water_ml ?? value.water_ml))
+    : Math.max(0, Math.round(value.water_ml));
+  const pourSumMl = value.pours.reduce(
+    (sum, p) => sum + (Number.isFinite(p.ml) ? p.ml : 0),
+    0,
+  );
+  const pourDiffMl = Math.round(pourTargetMl - pourSumMl);
+  const pourMatched = Math.abs(pourDiffMl) <= 1;
+  const pourPct =
+    pourTargetMl > 0
+      ? Math.min(100, Math.round((pourSumMl / pourTargetMl) * 100))
+      : 0;
+  const canScalePours =
+    !disabled &&
+    value.pours.length > 0 &&
+    !pourMatched &&
+    pourTargetMl >= value.pours.length * 10 &&
+    pourTargetMl <= value.pours.length * 127;
+
+  const scalePoursToTarget = () => {
+    const n = value.pours.length;
+    if (!n || pourTargetMl < n * 10) return;
+    const baseSum = value.pours.reduce(
+      (s, p) => s + (p.ml > 0 ? p.ml : 0),
+      0,
+    );
+    const scaled = value.pours.map((p) => {
+      const raw =
+        baseSum > 0 ? (Math.max(0, p.ml) / baseSum) * pourTargetMl : pourTargetMl / n;
+      return Math.min(127, Math.max(10, Math.round(raw)));
+    });
+    let remainder =
+      pourTargetMl - scaled.reduce((sum, ml) => sum + ml, 0);
+    for (let step = 0; step < Math.abs(remainder) + n * 2 && remainder !== 0; step++) {
+      const idx = n - 1 - (step % n);
+      if (remainder > 0 && scaled[idx]! < 127) {
+        scaled[idx]! += 1;
+        remainder -= 1;
+      } else if (remainder < 0 && scaled[idx]! > 10) {
+        scaled[idx]! -= 1;
+        remainder += 1;
+      }
+    }
+    onChange({
+      ...value,
+      pours: value.pours.map((p, idx) => ({ ...p, ml: scaled[idx]! })),
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -311,19 +417,14 @@ export function CoffeeEditor({
         <Field
           label={t("editor.bypassTemp")}
           htmlFor="coffee-bypass-temp"
-          hint={t("editor.bypassHint")}
           error={fieldErrors.bypass_temp_c}
         >
-          <TextInput
+          <TempInputField
             id="coffee-bypass-temp"
-            value={tempInputValue(value.bypass_temp_c)}
+            value={value.bypass_temp_c}
             disabled={disabled}
-            onChange={(e) =>
-              set(
-                "bypass_temp_c",
-                e.target.value === "" ? undefined : parseTemp(e.target.value),
-              )
-            }
+            allowOptional
+            onChange={(next) => set("bypass_temp_c", next)}
           />
         </Field>
         <Field label={t("editor.note")} htmlFor="coffee-note" className="sm:col-span-2" error={fieldErrors.note}>
@@ -352,6 +453,36 @@ export function CoffeeEditor({
             <Plus className="h-3.5 w-3.5" aria-hidden />
             {t("editor.addPour")}
           </Button>
+        </div>
+        <div className="mb-3 rounded-xl border border-line bg-surface-2 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className={pourMatched ? "font-medium text-accent-green" : "font-medium text-accent-amber"}>
+              {(pourMatched ? t("editor.pourSumMatch") : t("editor.pourSumDiff"))
+                .replace("{sum}", String(Math.round(pourSumMl)))
+                .replace("{target}", String(pourTargetMl))}
+            </span>
+            {canScalePours ? (
+              <button
+                type="button"
+                onClick={scalePoursToTarget}
+                className="rounded-lg border border-line bg-surface px-2 py-0.5 text-[11px] font-medium text-ink hover:bg-surface-3"
+              >
+                {t("editor.scalePoursToTarget").replace("{target}", String(pourTargetMl))}
+              </button>
+            ) : null}
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-3">
+            <div
+              className={`h-full rounded-full transition-[width] duration-200 ${
+                pourMatched
+                  ? "bg-accent-green"
+                  : pourTargetMl > 0 && pourSumMl > pourTargetMl * 1.1
+                    ? "bg-accent-red"
+                    : "bg-accent-amber"
+              }`}
+              style={{ width: `${pourPct}%` }}
+            />
+          </div>
         </div>
         <div className="space-y-2">
           {value.pours.map((p, i) => (
@@ -453,10 +584,12 @@ function PourRowCoffee({
           />
         </Field>
         <Field label={t("editor.temp")}>
-          <TextInput
-            value={tempInputValue(pour.temp_c)}
+          <TempInputField
+            value={pour.temp_c}
             disabled={disabled}
-            onChange={(e) => onChange({ temp_c: parseTemp(e.target.value) })}
+            onChange={(next) => {
+              if (next !== undefined) onChange({ temp_c: next });
+            }}
           />
         </Field>
         <Field label={t("editor.pattern")}>
@@ -473,7 +606,7 @@ function PourRowCoffee({
                 value={p}
                 disabled={index === 0 && p === "center"}
               >
-                {p}
+                {t(`pattern.${p}` as Parameters<typeof t>[0])}
               </option>
             ))}
           </Select>
@@ -490,7 +623,7 @@ function PourRowCoffee({
         </Field>
         <Field
           label={t("editor.rpm")}
-          hint={isCenter ? "0 (center)" : "60-120"}
+          hint={isCenter ? `0 (${t("pattern.center")})` : "60-120"}
         >
           <TextInput
             type="number"
@@ -527,7 +660,7 @@ function PourRowCoffee({
           >
             {VIBRATIONS.map((v) => (
               <option key={v} value={v}>
-                {v}
+                {t(`vibration.${v}` as Parameters<typeof t>[0])}
               </option>
             ))}
           </Select>
@@ -707,7 +840,7 @@ export function TeaEditor({
                   >
                     {POUR_PATTERNS.map((pat) => (
                       <option key={pat} value={pat}>
-                        {pat}
+                        {t(`pattern.${pat}` as Parameters<typeof t>[0])}
                       </option>
                     ))}
                   </Select>

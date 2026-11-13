@@ -24,10 +24,12 @@ const store = new Map<string, string>();
 const {
   appendLocalHistory,
   clearLocalHistory,
+  filterLocalHistory,
   getLocalHistoryEvent,
   historyStatus,
   importCloudBrewRecords,
   listLocalHistory,
+  mergeHostAndLocalHistory,
   parseLineChartTelemetry,
 } = await import("./localHistory.ts");
 
@@ -149,5 +151,55 @@ describe("parseBrewRecordPayload", () => {
       cupType: 1,
     });
     assert.equal(pod.serving_kind, "xpod");
+  });
+});
+
+
+describe("mergeHostAndLocalHistory", () => {
+  beforeEach(() => store.clear());
+
+  it("merges host events with local telemetry and deduplicates by workflow_id", () => {
+    const local = [
+      appendLocalHistory({
+        event_id: "local-1",
+        workflow_id: "wf-shared",
+        source: "web-bluetooth",
+        outcome: "completed",
+        recipe_name: "Geisha",
+        recorded_at: "2026-11-10T09:00:00Z",
+        telemetry: [{ t: 1000, cupWeightG: 42.5, dispensedWaterMl: 50 }],
+      }),
+    ];
+    const host = [
+      {
+        event_id: "host-dup",
+        workflow_id: "wf-shared",
+        source: "bridge",
+        outcome: "completed",
+        recipe_name: "Geisha",
+        machine: "Studio-Lab",
+        recorded_at: "2026-11-10T09:00:05Z",
+      },
+      {
+        event_id: "host-2",
+        workflow_id: "wf-host-only",
+        source: "mcp",
+        outcome: "completed",
+        recipe_name: "Oolong",
+        kind: "tea",
+        recorded_at: "2026-11-11T10:00:00Z",
+      },
+    ];
+
+    const merged = mergeHostAndLocalHistory(host, local);
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0].event_id, "host-2");
+    assert.equal(merged[1].event_id, "local-1");
+    assert.equal(merged[1].machine, "Studio-Lab");
+    assert.equal(merged[1].telemetry?.length, 1);
+
+    const hostFiltered = filterLocalHistory(merged, { source: "host" });
+    assert.equal(hostFiltered.length, 1);
+    assert.equal(hostFiltered[0].event_id, "host-2");
   });
 });

@@ -895,9 +895,23 @@ export type HistoryListResult = {
 
 export const COFFEE_START_CONFIRMATION = "cup-filter-water-beans";
 export const TEA_START_CONFIRMATION = "tea-brewer-water-cup-clear";
+export const WATER_START_CONFIRMATION = "vessel-water-clear";
+export const ROOM_TEMPERATURE_C = 20;
 
 export function startConfirmationForKind(kind: "coffee" | "tea"): string {
   return kind === "tea" ? TEA_START_CONFIRMATION : COFFEE_START_CONFIRMATION;
+}
+
+export interface WaterStartBody {
+  volume_ml: number;
+  temp_c: number;
+  confirmation: string;
+  request_id: string;
+  flow_ml_s?: number;
+  pattern?: "center" | "spiral" | "circular" | "ring";
+  water_source?: "auto" | "tank" | "tap";
+  address?: string;
+  scan_timeout?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,6 +1092,9 @@ export const api = {
       ...(opts?.address != null ? { address: opts.address } : {}),
       ...(opts?.scan_timeout != null ? { scan_timeout: opts.scan_timeout } : {}),
     }),
+
+  waterStart: (body: WaterStartBody) =>
+    postJson<WorkflowResult>("/device/water/start", body),
 
   // Observation
   bridge: () => get<BridgeState>("/device/bridge"),
