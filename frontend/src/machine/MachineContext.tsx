@@ -21,6 +21,7 @@ import {
   writeMachineDriver,
   type MachineDriver,
 } from "./driver";
+import { isStaticDeploy } from "../lib/deploy";
 
 type MachineContextValue = {
   driver: MachineDriver;
@@ -40,7 +41,7 @@ export function MachineProvider({ children }: { children: ReactNode }) {
     detectWebBluetooth(),
   );
   const [driver, setDriverState] = useState<MachineDriver>(() =>
-    readMachineDriver(detectWebBluetooth()),
+    readMachineDriver(isStaticDeploy() ? detectWebBluetooth() : { usable: false }),
   );
   const bleSession = useMemo(() => getWebBleSession(), []);
   const [bleSnapshot, setBleSnapshot] = useState<SessionSnapshot>(() =>
@@ -54,10 +55,10 @@ export function MachineProvider({ children }: { children: ReactNode }) {
     try {
       const raw = localStorage.getItem("xbloom.machineDriver");
       if (raw == null) {
-        setDriverState(readMachineDriver(cap));
+        setDriverState(readMachineDriver(isStaticDeploy() ? cap : { usable: false }));
       }
     } catch {
-      setDriverState(readMachineDriver(cap));
+      setDriverState(readMachineDriver(isStaticDeploy() ? cap : { usable: false }));
     }
   }, []);
 

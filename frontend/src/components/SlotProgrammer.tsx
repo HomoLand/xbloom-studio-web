@@ -2,9 +2,9 @@
  * Easy-Mode A/B/C slot programmer — write batch + read via App cloud Easy list.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
-import type { CoffeeRecipeContent, RecipeContent } from "../api";
+import type { CoffeeRecipeContent, RecipeContent, RecipeRecord } from "../api";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
 import {
@@ -15,10 +15,6 @@ import {
   type EasyModeSnapshot,
   type EasySlotView,
 } from "../lib/easyModeSlots";
-import {
-  listAllLocalRecipes,
-  type LocalRecipeEntry,
-} from "../lib/localRecipes";
 import { isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
 import {
   cacheMachineSerial,
@@ -29,7 +25,6 @@ import {
   Alert,
   Button,
   Field,
-  Panel,
   Select,
   StatusPill,
   TextInput,
@@ -44,22 +39,25 @@ type Phase =
   | "done"
   | "error";
 
-function coffeeEntries(): LocalRecipeEntry[] {
-  return listAllLocalRecipes().filter((e) => isCoffeeContent(e.content));
-}
-
 function asCoffee(c: RecipeContent | undefined): CoffeeRecipeContent | null {
   return c && isCoffeeContent(c) ? c : null;
 }
 
-export function SlotProgrammer() {
+export function SlotProgrammer({ recipes }: { recipes: RecipeRecord[] }) {
   const { t, tPhase, tStatus } = useI18n();
   const { driver, bleSession, bleSnapshot, connectBle } = useMachine();
-  const options = useMemo(() => coffeeEntries(), []);
+  const options = useMemo(() => recipes.flatMap(recipe => {
+    const content = recipe.latest_revision?.content;
+    return content && isCoffeeContent(content) ? [{ recipe_id: recipe.recipe_id, name: recipe.name, content }] : [];
+  }), [recipes]);
   const firstId = options[0]?.recipe_id ?? "";
   const [slotA, setSlotA] = useState(firstId);
   const [slotB, setSlotB] = useState(firstId);
   const [slotC, setSlotC] = useState(firstId);
+  useEffect(() => {
+    const retain = (id: string) => options.some(option => option.recipe_id === id) ? id : firstId;
+    setSlotA(retain); setSlotB(retain); setSlotC(retain);
+  }, [options, firstId]);
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -211,15 +209,11 @@ export function SlotProgrammer() {
       setPhase("error");
       return;
     }
-    const creds = getAccountCredentials();
-    if (!creds) {
-      setError(t("slots.needAccount"));
-      setPhase("error");
-      return;
-    }
     setBusy(true);
     setPhase("read");
     try {
+      const creds = await getAccountCredentials();
+      if (!creds) throw new Error(t("slots.needAccount"));
       await ensureConnected();
       let sn = "";
       let snSource: "live" | "manual" | "cache" = "live";
@@ -290,10 +284,12 @@ export function SlotProgrammer() {
   };
 
   return (
-    <Panel title={t("slots.title")} className="mt-4">
-      <p className="mb-3 text-xs text-ink-muted">{t("slots.hint")}</p>
-      <p className="mb-3 text-xs text-ink-faint">{t("slots.readHint")}</p>
-
+    <details className="mt-4 rounded-2xl border border-line bg-surface">
+      <summary className="flex cursor-pointer select-none flex-wrap items-center justify-between gap-2 px-4 py-3.5 text-sm font-semibold text-ink">
+        <span>{t("slots.title")}</span>
+        <span className="text-xs font-normal text-ink-muted">{t("slots.hint")}</span>
+      </summary>
+      <div className="border-t border-line p-4">
       <div className="mb-3 flex flex-wrap gap-1.5">
         <StatusPill tone="neutral">{phaseLabel(phase)}</StatusPill>
         {bleSnapshot.phase !== "idle" && bleSnapshot.phase !== "disconnected" ? (
@@ -357,7 +353,6 @@ export function SlotProgrammer() {
             spellCheck={false}
           />
         </Field>
-        <p className="mt-1 text-[11px] text-ink-faint">{t("slots.snHint")}</p>
       </div>
 
       {options.length === 0 ? (
@@ -426,7 +421,8 @@ export function SlotProgrammer() {
           {busy && phase === "write" ? t("slots.writing") : t("slots.write")}
         </Button>
       </div>
-    </Panel>
+      </div>
+    </details>
   );
 }
 

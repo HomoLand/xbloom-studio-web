@@ -126,7 +126,7 @@ def test_design_config_from_env_defaults(client: TestClient) -> None:
     resp = client.get("/api/design/config")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert set(body.keys()) == {"provider", "model", "design_mode", "image_data_fate"}
+    assert set(body.keys()) == {"provider", "model", "design_mode", "image_data_fate", "reasoning_effort", "web_search"}
     assert body["provider"]
     assert body["model"]
     assert body["design_mode"] in {"vision", "text"}

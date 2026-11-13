@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  AlertTriangle,
   Beaker,
   Pause,
   Play,
@@ -883,7 +882,7 @@ export default function Dashboard() {
                 </StatusPill>
               ) : null}
               {bleSnapshot.loaded ? (
-                <StatusPill tone="amber">recipe loaded</StatusPill>
+                <StatusPill tone="amber">{t("status.armed")}</StatusPill>
               ) : null}
             </div>
             {bleSnapshot.hasPairedDevice ? (
@@ -1127,38 +1126,28 @@ export default function Dashboard() {
                 </Button>
               ) : null}
             </div>
-            {webBleCanPause || webBleCanResume ? (
-              <p className="text-[11px] leading-relaxed text-ink-faint">
-                {webBleCanResume
-                  ? t("dashboard.pauseStateNote")
-                  : t("dashboard.pauseWhileRunningNote")}
-              </p>
-            ) : null}
-            {staticDeploy ? (
-              <p className="text-xs text-ink-muted">{t("dashboard.staticHint")}</p>
-            ) : null}
           </div>
         </Panel>
       ) : null}
 
       {busyExternalBanner ? (
-        <Alert tone="amber" title="Device busy (external)" className="mb-4">
+        <Alert tone="amber" title={t("dashboard.deviceBusyTitle")} className="mb-4">
           {busyExternalBanner}
-          <div className="mt-1 text-xs opacity-90">
-            Free the link on the other device, then refresh.
-          </div>
         </Alert>
       ) : null}
 
       {staleMismatch ? (
-        <Alert tone="amber" title="Workflow switched" className="mb-4">
+        <Alert tone="amber" title={t("dashboard.workflowSwitchedTitle")} className="mb-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 text-sm">
-              Showing the active bridge workflow
-              {controlResolution.actualActiveId
-                ? ` (${shortId(controlResolution.actualActiveId, 14)})`
-                : ""}
-              . Controls are disabled until you use the active workflow.
+              {t("dashboard.workflowSwitchedDesc")
+                .replace(
+                  "{active}",
+                  controlResolution.actualActiveId
+                    ? shortId(controlResolution.actualActiveId, 14)
+                    : "—",
+                )
+                .replace("{tracked}", trackedId ? shortId(trackedId, 14) : "—")}
             </div>
             {controlResolution.actualActiveId ? (
               <Button
@@ -1172,7 +1161,7 @@ export default function Dashboard() {
                   setActionGuidance(null);
                 }}
               >
-                Use active workflow
+                {t("dashboard.useActiveWorkflow")}
               </Button>
             ) : null}
           </div>
@@ -1180,13 +1169,13 @@ export default function Dashboard() {
       ) : null}
 
       {eventSyncWarning ? (
-        <Alert tone="amber" title="Event sync" className="mb-4">
+        <Alert tone="amber" className="mb-4">
           {eventSyncWarning}
         </Alert>
       ) : null}
 
       {eventError ? (
-        <Alert tone="red" className="mb-4" title="Events">
+        <Alert tone="red" className="mb-4">
           {eventError}
           {eventGuidance ? (
             <div className="mt-1 text-xs opacity-90">{eventGuidance}</div>
@@ -1195,7 +1184,7 @@ export default function Dashboard() {
       ) : null}
 
       {statusError ? (
-        <Alert tone="red" className="mb-4" title="Status">
+        <Alert tone="red" className="mb-4">
           {statusError}
           {statusGuidance ? (
             <div className="mt-1 text-xs opacity-90">{statusGuidance}</div>
@@ -1204,7 +1193,7 @@ export default function Dashboard() {
       ) : null}
 
       {actionError ? (
-        <Alert tone="red" className="mb-4" title="Control">
+        <Alert tone="red" className="mb-4">
           {actionError}
           {actionGuidance ? (
             <div className="mt-1 text-xs opacity-90">{actionGuidance}</div>
@@ -1213,17 +1202,15 @@ export default function Dashboard() {
       ) : null}
 
       {recoveryRequired ? (
-        <Alert tone="amber" title="Recovery required" className="mb-4">
+        <Alert tone="amber" title={t("dashboard.recovery")} className="mb-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 text-sm">
-              Reconcile needed for workflow{" "}
               <code className="text-ink">
                 {shortId(
                   controlResolution.controlId || trackedId || "",
                   16,
                 )}
               </code>
-              .
               {recovery?.detail ? (
                 <div className="mt-1 text-xs opacity-90">
                   {formatRecoveryDetail(recovery.detail)}
@@ -1241,209 +1228,208 @@ export default function Dashboard() {
               }
               onClick={() => void runControl("reconcile")}
             >
-              {actionBusy === "reconcile" ? "Reconciling..." : "Reconcile"}
+              {actionBusy === "reconcile" ? t("common.loading") : t("common.retry")}
             </Button>
           </div>
         </Alert>
       ) : null}
 
-      <Panel
-        title="Bridge"
-        action={
-          observeHealth !== "ok" ? (
-            <StatusPill tone={observeHealth === "offline" ? "red" : "amber"}>
-              {observeHealth === "offline" ? "Offline" : "Stale"}
-            </StatusPill>
-          ) : null
-        }
-      >
-        {loading && !bridge ? (
-          <Spinner label="Loading bridge status" />
-        ) : bridge ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-1.5">
-              <StatusPill tone={bridge.running ? "green" : "red"}>
-                {bridge.running ? "Daemon running" : "Daemon stopped"}
-              </StatusPill>
-              <StatusPill tone={bridge.connected ? "green" : "neutral"}>
-                {bridge.connected ? "Machine linked" : "Not linked"}
-              </StatusPill>
-              <StatusPill tone="blue">{connectionScope}</StatusPill>
-              {recoveryRequired ? (
-                <StatusPill tone="amber">recovery</StatusPill>
-              ) : null}
-              {bridge.release_pending ? (
-                <StatusPill tone="amber">release pending</StatusPill>
-              ) : null}
-            </div>
-            <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <FieldRow label="Machine" value={bridge.machine ?? "-"} />
-              <FieldRow
-                label="Firmware"
-                value={asTrimmedString(bridge.firmware) ?? "-"}
-              />
-              <FieldRow label="Connection scope" value={connectionScope} />
-              <FieldRow label="Workflow source" value={workflowSource} />
-              <FieldRow
-                label="Recovery"
-                value={
-                  recoveryRequired ? "required" : recovery ? "clear" : "-"
-                }
-              />
-              <FieldRow
-                label="Last BLE release"
-                value={formatDisconnect(bridge)}
-              />
-              {bridge.last_disconnect_error ? (
-                <FieldRow
-                  label="Release error"
-                  value={String(bridge.last_disconnect_error)}
-                />
-              ) : null}
-              <FieldRow
-                label="Activity"
-                value={asTrimmedString(bridge.activity) ?? "idle"}
-              />
-              <FieldRow label="Phase" value={phase ?? "-"} />
-              <FieldRow
-                label="Instance"
-                value={
-                  asTrimmedString(bridge.instance_id)
-                    ? shortId(String(bridge.instance_id), 12)
-                    : "-"
-                }
-              />
-            </dl>
-            {bridge.last_error ? (
-              <Alert tone="amber" title="Last error">
-                {String(bridge.last_error)}
-              </Alert>
-            ) : null}
-            {!bridge.running ? (
-              <p className="text-xs leading-relaxed text-ink-muted">
-                Bridge is not running. Restart the host if needed.
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <EmptyMachineHint />
-        )}
-      </Panel>
-
-      <Panel title="Workflow" className="mt-4">
-        {!trackedId ? (
-          <div>
-            <p className="text-sm text-ink-muted">
-              No active workflow. Design or open a recipe to brew.
-            </p>
-            <div className="mt-4">
-              <EmptyMachineHint compact />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <FieldRow label="Workflow" value={shortId(trackedId, 18)} />
-              <FieldRow label="Kind" value={displayKind} />
-              <FieldRow
-                label="State"
-                value={
-                  asTrimmedString(summary?.state) ??
-                  finalSummary.result ??
-                  phase ??
-                  "-"
-                }
-              />
-              <FieldRow
-                label="Revision"
-                value={
-                  displayRevision ? shortId(String(displayRevision), 12) : "-"
-                }
-              />
-            </dl>
-            <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] break-all text-ink">
-              {trackedId}
-            </div>
-
-            {/* Controls hidden until stale active-workflow is acknowledged. */}
-            {!staleMismatch &&
-            controlResolution.controlId &&
-            (!durableTerminal || recoveryRequired) ? (
-              <div className="flex flex-wrap gap-2">
-                {controls.has("cancel") ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => void runControl("cancel")}
-                  >
-                    <XCircle className="h-3.5 w-3.5" aria-hidden />
-                    {actionBusy === "cancel" ? "Cancelling..." : "Cancel"}
-                  </Button>
+      {driver === "bridge" || Boolean(trackedId) || recoveryRequired || staleMismatch ? (
+        <>
+          <Panel
+            title={t("dashboard.bridgePanel")}
+            action={
+              observeHealth !== "ok" ? (
+                <StatusPill tone={observeHealth === "offline" ? "red" : "amber"}>
+                  {observeHealth === "offline"
+                    ? t("settings.bridgeOffline")
+                    : "Stale"}
+                </StatusPill>
+              ) : null
+            }
+          >
+            {loading && !bridge ? (
+              <Spinner label={t("common.loading")} />
+            ) : bridge ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  <StatusPill tone={bridge.running ? "green" : "red"}>
+                    {bridge.running
+                      ? t("dashboard.daemonRunning")
+                      : t("dashboard.daemonStopped")}
+                  </StatusPill>
+                  <StatusPill tone={bridge.connected ? "green" : "neutral"}>
+                    {bridge.connected
+                      ? t("dashboard.machineLinked")
+                      : t("dashboard.machineNotLinked")}
+                  </StatusPill>
+                  <StatusPill tone="blue">{connectionScope}</StatusPill>
+                  {recoveryRequired ? (
+                    <StatusPill tone="amber">{t("dashboard.recovery")}</StatusPill>
+                  ) : null}
+                  {bridge.release_pending ? (
+                    <StatusPill tone="amber">{t("dashboard.bleReleasePending")}</StatusPill>
+                  ) : null}
+                </div>
+                <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                  <FieldRow label={t("history.machine")} value={bridge.machine ?? "-"} />
+                  <FieldRow
+                    label="Firmware"
+                    value={asTrimmedString(bridge.firmware) ?? "-"}
+                  />
+                  <FieldRow label={t("dashboard.connScope")} value={connectionScope} />
+                  <FieldRow label={t("history.source")} value={workflowSource} />
+                  <FieldRow
+                    label={t("dashboard.recovery")}
+                    value={
+                      recoveryRequired ? "required" : recovery ? "clear" : "-"
+                    }
+                  />
+                  <FieldRow
+                    label={t("dashboard.lastBleRelease")}
+                    value={formatDisconnect(bridge)}
+                  />
+                  {bridge.last_disconnect_error ? (
+                    <FieldRow
+                      label={t("dashboard.bleReleaseFailed")}
+                      value={String(bridge.last_disconnect_error)}
+                    />
+                  ) : null}
+                  <FieldRow
+                    label={t("dashboard.phase")}
+                    value={tMachineOrPhase(asTrimmedString(bridge.activity), phase)}
+                  />
+                  <FieldRow
+                    label={t("dashboard.instance")}
+                    value={
+                      asTrimmedString(bridge.instance_id)
+                        ? shortId(String(bridge.instance_id), 12)
+                        : "-"
+                    }
+                  />
+                </dl>
+                {bridge.last_error ? (
+                  <Alert tone="amber">
+                    {String(bridge.last_error)}
+                  </Alert>
                 ) : null}
-                {controls.has("pause") ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => void runControl("pause")}
-                  >
-                    <Pause className="h-3.5 w-3.5" aria-hidden />
-                    {actionBusy === "pause" ? "Pausing..." : "Pause"}
-                  </Button>
-                ) : null}
-                {controls.has("resume") ? (
-                  <Button
-                    variant="success"
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => void runControl("resume")}
-                  >
-                    <Play className="h-3.5 w-3.5" aria-hidden />
-                    {actionBusy === "resume" ? "Resuming..." : "Resume"}
-                  </Button>
-                ) : null}
-                {controls.has("stop") ? (
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => void runControl("stop")}
-                  >
-                    <Square className="h-3.5 w-3.5" aria-hidden />
-                    {actionBusy === "stop" ? "Stopping..." : "Stop"}
-                  </Button>
-                ) : null}
-                {controls.has("reconcile") && !recoveryRequired ? (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => void runControl("reconcile")}
-                  >
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-                    {actionBusy === "reconcile"
-                      ? "Reconciling..."
-                      : "Reconcile"}
-                  </Button>
+                {!bridge.running ? (
+                  <p className="text-xs leading-relaxed text-ink-muted">
+                    {t("dashboard.bridgeDown")}
+                  </p>
                 ) : null}
               </div>
-            ) : null}
+            ) : (
+              <EmptyMachineHint />
+            )}
+          </Panel>
 
-            <TelemetryBlock bridge={bridge} />
+          <Panel title={t("dashboard.workflowTitle")} className="mt-4">
+            {!trackedId ? (
+              <p className="text-sm text-ink-muted">
+                {t("dashboard.noWorkflow")}
+              </p>
+            ) : (
+              <div className="space-y-4">
+                <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                  <FieldRow label={t("history.workflow")} value={shortId(trackedId, 18)} />
+                  <FieldRow label={t("recipes.kind")} value={displayKind} />
+                  <FieldRow
+                    label={t("dashboard.phase")}
+                    value={
+                      asTrimmedString(summary?.state) ??
+                      finalSummary.result ??
+                      phase ??
+                      "-"
+                    }
+                  />
+                  <FieldRow
+                    label={t("history.revision")}
+                    value={
+                      displayRevision ? shortId(String(displayRevision), 12) : "-"
+                    }
+                  />
+                </dl>
+                <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] break-all text-ink">
+                  {trackedId}
+                </div>
 
-            {durableTerminal ? (
-              <FinalSummaryPanel
-                summary={finalSummary}
-                release={release}
-                workflowId={trackedId}
-              />
-            ) : null}
+                {/* Controls hidden until stale active-workflow is acknowledged. */}
+                {!staleMismatch &&
+                controlResolution.controlId &&
+                (!durableTerminal || recoveryRequired) ? (
+                  <div className="flex flex-wrap gap-2">
+                    {controls.has("cancel") ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={actionBusy !== null}
+                        onClick={() => void runControl("cancel")}
+                      >
+                        <XCircle className="h-3.5 w-3.5" aria-hidden />
+                        {actionBusy === "cancel"
+                          ? t("dashboard.cancelling")
+                          : t("dashboard.cancelBrew")}
+                      </Button>
+                    ) : null}
+                    {controls.has("pause") ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={actionBusy !== null}
+                        onClick={() => void runControl("pause")}
+                      >
+                        <Pause className="h-3.5 w-3.5" aria-hidden />
+                        {actionBusy === "pause"
+                          ? t("dashboard.pausing")
+                          : t("dashboard.pause")}
+                      </Button>
+                    ) : null}
+                    {controls.has("resume") ? (
+                      <Button
+                        variant="success"
+                        size="sm"
+                        disabled={actionBusy !== null}
+                        onClick={() => void runControl("resume")}
+                      >
+                        <Play className="h-3.5 w-3.5" aria-hidden />
+                        {actionBusy === "resume"
+                          ? t("dashboard.resuming")
+                          : t("dashboard.resume")}
+                      </Button>
+                    ) : null}
+                    {controls.has("stop") ? (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={actionBusy !== null}
+                        onClick={() => void runControl("stop")}
+                      >
+                        <Square className="h-3.5 w-3.5" aria-hidden />
+                        {actionBusy === "stop"
+                          ? t("dashboard.cancelling")
+                          : t("tools.stop")}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
 
-            <EventTimeline events={events} />
-          </div>
-        )}
-      </Panel>
+                <TelemetryBlock bridge={bridge} />
+
+                {durableTerminal ? (
+                  <FinalSummaryPanel
+                    summary={finalSummary}
+                    release={release}
+                    workflowId={trackedId}
+                  />
+                ) : null}
+
+                <EventTimeline events={events} />
+              </div>
+            )}
+          </Panel>
+        </>
+      ) : null}
 
       <BrewConfirmDialog
         open={!!brewTarget}
@@ -1467,6 +1453,7 @@ function FinalSummaryPanel({
   release: ReturnType<typeof bleReleaseLabel>;
   workflowId: string;
 }) {
+  const { t } = useI18n();
   const result = summary.result || "terminal";
   const tone =
     result === "completed" || result === "complete"
@@ -1490,39 +1477,34 @@ function FinalSummaryPanel({
         ) : null}
       </div>
       <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-        <FieldRow label="Result" value={summary.result ?? "-"} />
-        <FieldRow label="Activity" value={summary.activity ?? "-"} />
+        <FieldRow label={t("dashboard.phase")} value={summary.result ?? "-"} />
         <FieldRow
-          label="Release reason"
-          value={summary.releaseReason ?? "-"}
-        />
-        <FieldRow
-          label="Finished"
+          label={t("history.when")}
           value={formatFinishedAt(summary.finishedAt)}
         />
         <FieldRow
-          label="Water"
+          label={t("dashboard.water")}
           value={formatWaterLine(
             summary.dispensedWaterMl,
             summary.targetWaterMl,
           )}
         />
         <FieldRow
-          label="Cup delta"
+          label={t("dashboard.cup")}
           value={
             summary.cupDeltaG != null
               ? `${formatMaybeNumber(summary.cupDeltaG)} g`
               : "-"
           }
         />
-        <FieldRow label="Workflow" value={shortId(workflowId, 14)} />
+        <FieldRow label={t("history.workflow")} value={shortId(workflowId, 14)} />
       </dl>
       <div className="mt-3">
         <Link
           to="/history"
           className="text-sm font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
         >
-          Open history
+          {t("dashboard.viewHistory")}
         </Link>
       </div>
     </div>
@@ -1556,6 +1538,7 @@ function formatWaterLine(
 }
 
 function TelemetryBlock({ bridge }: { bridge: BridgeState | null }) {
+  const { t, tStatus } = useI18n();
   if (!bridge) return null;
   const tel =
     bridge.telemetry && typeof bridge.telemetry === "object"
@@ -1599,11 +1582,16 @@ function TelemetryBlock({ bridge }: { bridge: BridgeState | null }) {
 
   return (
     <div>
-      <h3 className="mb-2 text-xs font-medium text-ink-muted">Live telemetry</h3>
+      <h3 className="mb-2 text-xs font-medium text-ink-muted">
+        {t("dashboard.liveTelemetry")}
+      </h3>
       <dl className="grid gap-2 text-sm sm:grid-cols-2">
-        <FieldRow label="Machine state" value={machineState ?? "-"} />
         <FieldRow
-          label="Water"
+          label={t("dashboard.phase")}
+          value={machineState ? tStatus(machineState) : "-"}
+        />
+        <FieldRow
+          label={t("dashboard.water")}
           value={
             water != null
               ? `${formatMaybeNumber(water)} ml${
@@ -1615,13 +1603,13 @@ function TelemetryBlock({ bridge }: { bridge: BridgeState | null }) {
           }
         />
         <FieldRow
-          label="Remaining"
+          label={t("dashboard.remaining")}
           value={
             remaining != null ? `${formatMaybeNumber(remaining)} ml` : "-"
           }
         />
         <FieldRow
-          label="Cup"
+          label={t("dashboard.cup")}
           value={cup != null ? `${formatMaybeNumber(cup)} g` : "-"}
         />
       </dl>
@@ -1630,14 +1618,15 @@ function TelemetryBlock({ bridge }: { bridge: BridgeState | null }) {
 }
 
 function EventTimeline({ events }: { events: BridgeEvent[] }) {
+  const { t } = useI18n();
   if (!events.length) {
     return (
       <div>
         <h3 className="mb-2 text-xs font-medium text-ink-muted">
-          Durable events
+          {t("dashboard.durableEvents")}
         </h3>
         <p className="text-xs text-ink-faint">
-          No durable events yet for this workflow.
+          {t("dashboard.noDurableEvents")}
         </p>
       </div>
     );
@@ -1647,7 +1636,7 @@ function EventTimeline({ events }: { events: BridgeEvent[] }) {
   return (
     <div>
       <h3 className="mb-2 text-xs font-medium text-ink-muted">
-        Durable events
+        {t("dashboard.durableEvents")}
         <span className="ml-1 font-normal text-ink-faint">
           ({events.length})
         </span>

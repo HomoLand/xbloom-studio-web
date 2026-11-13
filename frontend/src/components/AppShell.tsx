@@ -38,13 +38,13 @@ export function AppShell() {
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-faint">
             {mode ? (
               <StatusPill tone={mode === "lan" ? "blue" : "neutral"}>
-                {mode}
+                {mode === "lan" ? "LAN" : "Local"}
               </StatusPill>
             ) : null}
             <StatusPill
               tone={driver === "web-bluetooth" ? "green" : "neutral"}
             >
-              {driver === "web-bluetooth" ? "web-ble" : "bridge"}
+              {driver === "web-bluetooth" ? t("dashboard.webBle") : "Bridge"}
             </StatusPill>
           </div>
           {driver === "web-bluetooth" ? (

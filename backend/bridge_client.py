@@ -12,6 +12,7 @@ the bridge needs it). Passive scan stays outside this module.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,10 @@ def public_response(value: Any) -> Any:
     return sanitize_public_output(value)
 
 # Module-level long-lived client. Construction does not start the daemon or BLE.
-client = TypedBridgeClient(client_name="xbloom-studio-web")
+client = TypedBridgeClient(
+    client_name="xbloom-studio-web",
+    auto_ensure=os.environ.get("XBLOOM_BRIDGE_MANAGED") != "1",
+)
 
 
 def is_running() -> bool:

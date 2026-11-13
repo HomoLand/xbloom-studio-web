@@ -5,10 +5,35 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   appEncryptForm,
+  CloudError,
+  cloudErrorMessage,
   buildCloudCoffeeForm,
   collectRecipeRecords,
   APP_RSA_PUBLIC_KEY_B64,
 } from "./xbloomCloud.ts";
+
+describe("cloud login error display", () => {
+  const t = (key: "cloud.networkError" | "cloud.sessionExpired") => key;
+
+  it("keeps login transport failures distinct from rejected credentials", () => {
+    assert.equal(
+      cloudErrorMessage(new CloudError("xBloom cloud tMemberLogin.thtml request failed (network/CORS)"), t),
+      "cloud.networkError",
+    );
+    assert.equal(
+      cloudErrorMessage(new CloudError("xBloom account login was rejected"), t),
+      "cloud.sessionExpired",
+    );
+    for (const detail of ["returned HTTP 500", "timed out", "returned invalid JSON"]) {
+      const message = `xBloom cloud tMemberLogin.thtml ${detail}`;
+      assert.equal(cloudErrorMessage(new CloudError(message), t), message);
+    }
+    assert.equal(
+      cloudErrorMessage(new CloudError("xBloom cloud tuMyRecipeProduct.tuhtml returned HTTP 401"), t),
+      "cloud.sessionExpired",
+    );
+  });
+});
 
 describe("xbloomCloud RSA form encrypt", () => {
   it("produces base64 ciphertext of expected block size", () => {

@@ -5,7 +5,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Save } from "lucide-react";
-import type { RecipeContent } from "../api";
+import { api, type RecipeContent } from "../api";
+import { isStaticDeploy } from "../lib/deploy";
 import {
   CoffeeEditor,
   TeaEditor,
@@ -42,6 +43,9 @@ export default function RecipeEdit() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const recipeId = params.get("id");
+  const hosted = params.get("host") === "1" && !isStaticDeploy();
+  const [hostRevision, setHostRevision] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<"coffee" | "tea">("coffee");
   const [content, setContent] = useState<RecipeContent>(() =>
     defaultCoffeeRecipe(),
@@ -51,6 +55,18 @@ export default function RecipeEdit() {
 
   useEffect(() => {
     if (!recipeId) return;
+    if (hosted) {
+      let active = true;
+      setHostRevision(null);
+      api.getRecipe(recipeId).then(result => {
+        if (!active) return;
+        if (!result.latest_revision) throw new Error(t("editor.notFound"));
+        setContent(cloneContent(result.latest_revision.content));
+        setMode(isTeaContent(result.latest_revision.content) ? "tea" : "coffee");
+        setHostRevision(result.latest_revision.revision_id);
+      }).catch(e => { if (active) setError(e instanceof Error ? e.message : String(e)); });
+      return () => { active = false; };
+    }
     const entry = getLocalRecipe(recipeId);
     if (!entry) {
       setError(t("editor.notFound"));
@@ -58,7 +74,7 @@ export default function RecipeEdit() {
     }
     setContent(cloneContent(entry.content));
     setMode(isTeaContent(entry.content) ? "tea" : "coffee");
-  }, [recipeId, t]);
+  }, [recipeId, t, hosted]);
 
   const title = useMemo(
     () =>
@@ -74,12 +90,22 @@ export default function RecipeEdit() {
     setSaved(false);
   };
 
-  const onSave = () => {
+  const onSave = async () => {
     setError(null);
     setSaved(false);
     const check = validateLocalContent(content);
     if (!check.valid) {
       setError(check.message);
+      return;
+    }
+    if (hosted && recipeId) {
+      if (!hostRevision) return;
+      setSaving(true);
+      try {
+        await api.createRevision(recipeId, { content: check.content, expected_parent_revision_id: hostRevision });
+        navigate(`/recipes?selected=${encodeURIComponent(recipeId)}`, { replace: true });
+      } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+      finally { setSaving(false); }
       return;
     }
     const entry = saveUserRecipe(check.content, {
@@ -106,7 +132,7 @@ export default function RecipeEdit() {
               <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
               {t("common.cancel")}
             </Link>
-            <Button variant="primary" size="sm" onClick={onSave}>
+            <Button variant="primary" size="sm" disabled={saving || (hosted && !hostRevision)} onClick={() => void onSave()}>
               <Save className="h-3.5 w-3.5" aria-hidden />
               {t("common.save")}
             </Button>

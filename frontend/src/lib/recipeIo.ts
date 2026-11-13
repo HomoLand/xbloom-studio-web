@@ -26,7 +26,7 @@ export type ExportBundle = {
 };
 
 export function exportRecipesJson(
-  entries?: LocalRecipeEntry[],
+  entries?: ExportBundle["recipes"],
 ): string {
   const list = entries ?? listAllLocalRecipes().filter((e) => e.source !== "official");
   const bundle: ExportBundle = {

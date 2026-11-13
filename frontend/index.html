@@ -16,8 +16,8 @@
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
-          const base = document.querySelector("base")?.href || "./";
-          const sw = new URL("sw.js", base || location.href).pathname;
+          const base = document.querySelector("base")?.href || location.href;
+          const sw = new URL("sw.js", base).pathname;
           navigator.serviceWorker.register(sw).catch(() => {});
         });
       }

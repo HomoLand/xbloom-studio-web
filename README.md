@@ -18,7 +18,9 @@ Live SPA (Chrome + Web Bluetooth, no local backend required for brew/recipes/his
 2. Open the Pages URL in **Chrome** (HTTPS / secure context).
 3. **Dashboard → Connect Studio** once (browser device picker). The site stores the device id for this origin.
 4. **Same tab**: disconnect/reconnect and later brews reuse the in-memory device (no picker). **After a full page reload**, Chrome may still require **one** chooser click if `getDevices()` does not restore the grant (common Web Bluetooth limit); after that, same-tab reconnect is silent again. Brew **auto-connects** when possible and **releases BLE** when finished.
-5. Optional: **Settings** → save account session (password is tab-only) → sync catalog / brew history; configure AI for Design. Use **Forget device** / **Change device** to re-pick.
+5. Optional: **Settings** → sign in and save the account session on the host → sync catalog / brew history; configure AI for Design. Static deployments keep the original tab-only password flow. Use **Forget device** / **Change device** to re-pick.
+
+Hosted account sessions survive tabs and service restarts. The official bearer session is stored in `XBLOOM_STATE_DIR/account/session.json` (directory 0700, file 0600); passwords are never stored or returned. Treat this directory as a secret when backing up the host. Only paired browsers can use the account through the existing authenticated/CSRF-protected API. **Sign out host account** removes the session for every paired browser; an expired official session requires signing in again. Browser pairing expiry remains independent.
 6. Optional: Recipes bottom **A/B/C slots** — choose three coffee recipes and write Easy-Mode presets (PRO batch).
 
 There is **no one-tap sample brew** on Dashboard; always choose a recipe on the Recipes page.
@@ -198,7 +200,9 @@ BLE bridge 是抢占式的单实例守护进程。OS 锁作用域是 **一个规
 | `XBLOOM_LLM_PROVIDER` | adapter 类型（当前仅 `openai-compatible`） | `openai-compatible` |
 | `XBLOOM_LLM_BASE_URL` | OpenAI-compatible 端点根 URL（**不要**在文档中写入真实地址） | 无，**必需** |
 | `XBLOOM_LLM_MODEL` | 模型名 | `grok-4.5` |
+| `XBLOOM_LLM_REASONING_EFFORT` | 可选推理强度 `low` / `high` / `max`；DeepSeek 同时显式启用 thinking | 不发送，由模型决定 |
 | `XBLOOM_LLM_API_KEY` | 模型密钥（secret；不进日志/响应） | 无 |
+| `XBLOOM_DESIGN_WEB_SEARCH` | `1` 启用 DeepSeek 官方 Search API；必须使用官方 HTTPS 端点 | `0` |
 | `XBLOOM_DESIGN_MODE` | `vision`（默认，图片发给模型）或 `text`（本地 OCR，只发文字） | `vision` |
 | `XBLOOM_DESIGN_MAX_IMAGE_BYTES` | 图片字节上限 | `5242880`（5 MiB） |
 | `XBLOOM_DESIGN_MAX_IMAGE_PIXELS` | 解码后像素上限 | `20000000` |
@@ -218,6 +222,12 @@ $env:XBLOOM_DESIGN_MODE = "vision"
 ```
 
 ### 隐私与安全行为
+
+托管页面通过服务端 `POST /api/design`（`Accept: text/event-stream`）显示识别、搜索、推理活动、公开设计依据与严格校验结果。取消或断开会中止任务；不展示模型私有思维链。DeepSeek 官方 Chat Completions 使用 JSON mode，配方仍须通过本地 schema/core 校验，最多修复一次。搜索复用同一官方 Key，搜索失败会报错，网页内容按不可信参考资料处理。
+
+配方卡片提供使用、保存和参数调整。托管模式保存到容器 SQLite，可从其他已授权浏览器读取、编辑为新版本或归档；静态部署保持浏览器本地存储。点击使用先显示确认页，不自动启动机器。托管模式未设置驱动偏好时默认使用 Bridge；静态部署仍按 Web Bluetooth 能力选择。
+
+配方库统一使用响应式卡片网格展示官方、账号、分享和 AI 配方；咖啡、冰冲和茶饮分别显示对应参数。卡片可直接打开使用确认或详情与编辑，AI 结果、详情及冲煮确认复用同一个 `RecipeCard` 组件。
 
 - **图片**：请求内解码，校正方向后重编码以剥离 EXIF/元数据；原始与净化后的字节**均不落盘**，也不进入 catalog/历史。
 - **vision 模式**：净化后的图片字节仅用于当次 provider 调用；响应不含图片。

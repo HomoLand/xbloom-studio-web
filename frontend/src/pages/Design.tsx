@@ -1,22 +1,21 @@
 /**
- * Design page — local multimodal API (Settings).
+ * Design page — hosted design API, with local AI for static deployments.
  * Multi-image upload + single-image clipboard paste, with previews and live stream log.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, ImagePlus, Save, Trash2, X } from "lucide-react";
-import type { RecipeContent } from "../api";
+import { Camera, ImagePlus, Trash2 } from "lucide-react";
+import { api, type DesignPublicConfig, type DesignResult, type DesignSource, type RecipeContent } from "../api";
 import {
   BrewConfirmDialog,
   type BrewTarget,
 } from "../components/BrewConfirmDialog";
-import { CoffeeEditor } from "../components/RecipeEditors";
+import { DesignRecipeCard } from "../components/DesignRecipeCard";
 import {
   Alert,
   Button,
   Dialog,
   Field,
-  IconButton,
   PageHeader,
   Panel,
   TextArea,
@@ -24,9 +23,10 @@ import {
 import { useI18n } from "../i18n/I18nContext";
 import { isAiConfigured, readAiConfig } from "../lib/aiConfig";
 import { designWithLocalAi, type DesignProgressEvent } from "../lib/localDesign";
+import { designImage, readDesignStream, type DesignEvent } from "../lib/designStream";
+import { isStaticDeploy } from "../lib/deploy";
 import { saveUserRecipe, validateLocalContent } from "../lib/localRecipes";
-import { isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
-import { useMachine } from "../machine/MachineContext";
+import { recipeDisplayName } from "../lib/recipeDomain";
 
 const ACCEPT_IMAGES = "image/jpeg,image/png,image/webp,image/gif";
 const MAX_IMAGES = 8;
@@ -69,7 +69,6 @@ function latestClipboardImage(data: DataTransfer | null): File | null {
 
 export default function Design() {
   const { t, locale } = useI18n();
-  const { driver } = useMachine();
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -87,13 +86,35 @@ export default function Design() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [brewTarget, setBrewTarget] = useState<BrewTarget | null>(null);
   const [validateMsg, setValidateMsg] = useState<string | null>(null);
+  const [serverConfig, setServerConfig] = useState<DesignPublicConfig | null>(null);
+  const [sources, setSources] = useState<DesignSource[]>([]);
+  const [result, setResult] = useState<DesignResult | null>(null);
+  const [savedRevision, setSavedRevision] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const staticMode = isStaticDeploy();
   /** null = probing, true = can open camera, false = no device / no API */
   const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const aiOk = isAiConfigured(readAiConfig());
+  const aiOk = staticMode ? isAiConfigured(readAiConfig()) : serverConfig != null;
+
+  useEffect(() => {
+    if (staticMode) return;
+    let active = true;
+    api.designConfig().then(config => { if (active) setServerConfig(config); })
+      .catch(e => { if (active) setDesignError(e instanceof Error ? e.message : String(e)); });
+    return () => { active = false; };
+  }, [staticMode]);
+  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    if (!designing) return;
+    const start = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [designing]);
 
   // Probe whether any video input exists (no permission prompt when possible).
   useEffect(() => {
@@ -286,7 +307,7 @@ export default function Design() {
   const onProgress = useCallback((ev: DesignProgressEvent) => {
     if (ev.kind === "stage") {
       setStages((s) => [...s, ev.message]);
-    } else {
+    } else if (ev.kind === "delta") {
       setStreamText((prev) => prev + ev.text);
     }
   }, []);
@@ -297,12 +318,41 @@ export default function Design() {
     setRationale(null);
     setStreamText("");
     setStages([]);
+    setCandidate(null);
+    setResult(null);
+    setSources([]);
+    setSavedRevision(null);
+    setValidateMsg(null);
+    setElapsed(0);
     if (!aiOk) {
       setDesignError(t("design.needAi"));
       return;
     }
     setDesigning(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
+      if (!staticMode) {
+        const form = new FormData();
+        form.set("text", `${locale.startsWith("zh") ? "请用简体中文设计配方。" : "Please write the recipe in English."}\n${text}`);
+        const image = await designImage(images.map(item => item.file));
+        if (controller.signal.aborted) return;
+        if (image) form.set("image", image);
+        const response = await api.designStream(form, controller.signal);
+        const generated = await readDesignStream(response, (event: DesignEvent) => {
+          if (event.kind === "stage") {
+            setStages(previous => [...previous, t(`design.stage.${event.stage}`) + (event.query ? ` · ${event.query}` : "")]);
+            if (event.stage === "repairing") setStreamText("");
+          } else if (event.kind === "draft") setStreamText(event.rationale || event.name || "");
+          else setSources(event.sources);
+        });
+        setResult(generated);
+        setCandidate(generated.recipe_candidate);
+        setRationale(generated.design_rationale);
+        setSources(generated.web_sources || []);
+        setStages(previous => [...previous, t("design.stage.complete")]);
+        return;
+      }
       const result = await designWithLocalAi({
         text,
         images: images.map((i) => i.file),
@@ -317,13 +367,15 @@ export default function Design() {
       const v = validateLocalContent(result.content);
       setValidateMsg(v.valid ? null : v.message);
     } catch (e) {
-      setDesignError(e instanceof Error ? e.message : String(e));
+      if (!controller.signal.aborted) setDesignError(e instanceof Error ? e.message : String(e));
+      else setStages(previous => [...previous, t("design.cancelled")]);
     } finally {
       setDesigning(false);
+      abortRef.current = null;
     }
   };
 
-  const saveLocal = () => {
+  const saveLocal = async () => {
     if (!candidate) return;
     setSaveBusy(true);
     setSaveMsg(null);
@@ -333,10 +385,21 @@ export default function Design() {
         setValidateMsg(v.message);
         return;
       }
-      const entry = saveUserRecipe(candidate, { source: "design" });
+      let recipeId: string | undefined;
+      if (!staticMode) {
+        const saved = await api.createRecipe({ content: candidate, provenance: {
+          source: "design", model: result?.provenance.model, design_rationale: rationale,
+          web_sources: sources, design_provenance: result?.provenance,
+        }});
+        recipeId = saved.recipe.recipe_id;
+        setSavedRevision(saved.revision.revision_id);
+        setSaveMsg(`${t("design.saved")}: ${saved.recipe.name}`);
+        return;
+      }
+      const entry = saveUserRecipe(candidate, { source: "design", recipeId });
       setSaveMsg(`${t("design.saved")}: ${entry.name}`);
     } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : String(e));
+      setDesignError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaveBusy(false);
     }
@@ -346,7 +409,7 @@ export default function Design() {
     <div>
       <PageHeader title={t("design.title")} description={t("design.desc")} />
 
-      {!aiOk ? (
+      {!aiOk && staticMode ? (
         <Alert tone="amber" className="mb-4">
           {t("design.needAi")}
         </Alert>
@@ -355,10 +418,12 @@ export default function Design() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title={t("design.title")}>
           <div className="space-y-3">
-            <Field label={t("design.placeholder")} htmlFor="design-text">
+            {serverConfig ? <p className="text-xs text-ink-muted">{serverConfig.model} · {serverConfig.reasoning_effort?.toUpperCase()} · {serverConfig.web_search ? t("design.searchOn") : t("design.searchOff")}</p> : null}
+            <Field label={t("design.promptLabel")} htmlFor="design-text">
               <TextArea
                 id="design-text"
                 rows={4}
+                maxLength={7600}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder={t("design.placeholder")}
@@ -370,9 +435,6 @@ export default function Design() {
                 {t("design.images")}
                 {images.length > 0 ? ` (${images.length})` : ""}
               </div>
-              <p className="mb-2 text-[11px] text-ink-faint">
-                {t("design.pasteHint")}
-              </p>
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
@@ -465,13 +527,14 @@ export default function Design() {
               disabled={designing || !aiOk}
               onClick={() => void runDesign()}
             >
-              {designing ? t("common.loading") : t("design.run")}
+              {designing ? `${t("design.generating")} · ${elapsed}s` : t("design.run")}
             </Button>
+            {designing && !staticMode ? <Button variant="secondary" onClick={() => abortRef.current?.abort()}>{t("design.cancel")}</Button> : null}
 
             {(designing || stages.length > 0 || streamText) && (
               <div className="rounded-2xl border border-line bg-surface-2">
                 <div className="border-b border-line px-3 py-1.5 text-xs font-medium text-ink-muted">
-                  {t("design.thinking")}
+                  {t("design.thinking")} · {elapsed}s
                 </div>
                 <div className="max-h-56 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed text-ink">
                   {stages.map((s, i) => (
@@ -480,9 +543,9 @@ export default function Design() {
                     </div>
                   ))}
                   {streamText ? (
-                    <pre className="mt-1 whitespace-pre-wrap break-words text-ink-muted">
+                    <p className="mt-2 whitespace-pre-wrap break-words font-sans text-sm text-ink-muted">
                       {streamText}
-                    </pre>
+                    </p>
                   ) : designing ? (
                     <div className="text-ink-faint">…</div>
                   ) : null}
@@ -493,67 +556,27 @@ export default function Design() {
           </div>
         </Panel>
 
-        <Panel title={candidate ? recipeDisplayName(candidate) : "—"}>
+        <div>
           {!candidate ? (
-            <p className="text-sm text-ink-muted">{t("design.desc")}</p>
+            <Panel title={t("design.result")}><p className="py-12 text-center text-sm text-ink-muted">{designing ? t("design.resultPending") : t("design.desc")}</p></Panel>
           ) : (
             <div className="space-y-3">
-              {rationale ? (
-                <p className="text-xs text-ink-muted">{rationale}</p>
-              ) : null}
-              {validateMsg ? <Alert tone="amber">{validateMsg}</Alert> : null}
-              {isCoffeeContent(candidate) ? (
-                <CoffeeEditor
-                  value={candidate}
-                  onChange={(c) => {
-                    setCandidate(c);
-                    setValidateMsg(null);
-                  }}
-                />
-              ) : (
-                <pre className="overflow-auto text-xs">
-                  {JSON.stringify(candidate, null, 2)}
-                </pre>
-              )}
+              <DesignRecipeCard content={candidate} rationale={rationale} sources={sources}
+                validated={!!savedRevision || candidate === result?.recipe_candidate}
+                model={serverConfig?.model || readAiConfig().model} busy={saveBusy || designing}
+                saved={!!savedRevision || (!!saveMsg && !validateMsg)} error={validateMsg}
+                onChange={changed => {
+                  setCandidate(changed); setSaveMsg(null); setSavedRevision(null);
+                  const validation = validateLocalContent(changed);
+                  setValidateMsg(validation.valid ? null : validation.message);
+                }}
+                onSave={() => void saveLocal()}
+                onUse={() => setBrewTarget({ recipeRevisionId: savedRevision || `local:design:${Date.now()}`, content: candidate, recipeName: recipeDisplayName(candidate) })}
+              />
               {saveMsg ? <Alert tone="green">{saveMsg}</Alert> : null}
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={saveBusy}
-                  onClick={saveLocal}
-                >
-                  <Save className="h-3.5 w-3.5" aria-hidden />
-                  {t("design.save")}
-                </Button>
-                {isCoffeeContent(candidate) && driver === "web-bluetooth" ? (
-                  <Button
-                    size="sm"
-                    variant="success"
-                    onClick={() =>
-                      setBrewTarget({
-                        recipeRevisionId: `design:${Date.now().toString(16)}`,
-                        content: candidate,
-                        recipeName: recipeDisplayName(candidate),
-                      })
-                    }
-                  >
-                    {t("recipes.brew")}
-                  </Button>
-                ) : null}
-                <IconButton
-                  label={t("common.close")}
-                  onClick={() => {
-                    setCandidate(null);
-                    setRationale(null);
-                  }}
-                >
-                  <X className="h-4 w-4" aria-hidden />
-                </IconButton>
-              </div>
             </div>
           )}
-        </Panel>
+        </div>
       </div>
 
       <BrewConfirmDialog

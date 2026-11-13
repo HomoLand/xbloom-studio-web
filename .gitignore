@@ -23,3 +23,7 @@ frontend/playwright/.cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local scratch / workspace notes
+/tmp/
+/AGENTS.md

@@ -36,6 +36,79 @@ SKILL_ROOT = (
 )
 
 
+def test_official_search_stream_validates_and_redacts(design_config):
+    import asyncio
+    from dataclasses import replace
+    import httpx
+
+    calls = []
+    output = dict(VALID_OUTPUT, design_rationale="Public notes " + design_config.api_key)
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append((request.url.path, body))
+        if request.url.path == "/v1/tools/search":
+            return httpx.Response(200, json={"results": [
+                {"title": "Unsafe", "url": "javascript:alert(1)"},
+                {"title": "Roaster", "url": "https://example.org/beans", "summary": "washed", "content": "untrusted page text"},
+            ]})
+        if body.get("thinking", {}).get("type") == "disabled":
+            return httpx.Response(200, json={"choices": [{"message": {"content": '{"query":"washed coffee official brew"}'}}]})
+        assert body["response_format"] == {"type": "json_object"}
+        assert body["reasoning_effort"] == "max"
+        assert "Required JSON Schema" in body["messages"][0]["content"]
+        assert "UNTRUSTED_WEB_RESULTS" in body["messages"][-1]["content"]
+        raw = json.dumps(output)
+        chunks = [{"choices": [{"delta": {"reasoning_content": "PRIVATE_REASONING_SENTINEL"}}]}]
+        chunks += [{"choices": [{"delta": {"content": raw[i:i+7]}}]} for i in range(0, len(raw), 7)]
+        sse = "".join("data: " + json.dumps(c) + "\n\n" for c in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, content=sse, headers={"content-type": "text/event-stream"})
+
+    async def run():
+        events = []
+        async def progress(event): events.append(event)
+        service = DesignService(replace(design_config, base_url="https://api.deepseek.com", model="deepseek-flash", reasoning_effort="max", web_search=True), http_transport=httpx.MockTransport(handler))
+        try:
+            result = await service.design(DesignInput(text="washed coffee"), on_progress=progress)
+        finally:
+            await service.aclose()
+        assert result["validation"]["valid"]
+        assert len(result["web_sources"]) == 1
+        assert any(e["kind"] == "draft" for e in events)
+        published = json.dumps(events) + json.dumps(result)
+        assert design_config.api_key not in published
+        assert "PRIVATE_REASONING_SENTINEL" not in published
+        assert "untrusted page text" not in published
+        assert "[redacted-secret]" in published
+    asyncio.run(run())
+    assert [p for p, _ in calls].count("/v1/tools/search") == 1
+
+
+def test_design_sse_route_preserves_validation(client):
+    response = client.post("/api/design", json={"text": "balanced coffee"}, headers={"Accept": "text/event-stream"})
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data:")]
+    assert events[-1]["kind"] == "result"
+    assert events[-1]["result"]["validation"]["valid"]
+
+
+def test_disconnecting_design_stream_cancels_provider():
+    import asyncio
+    from design.routes import _design_events
+    async def run():
+        cancelled = asyncio.Event()
+        class PendingService:
+            async def design(self, value, on_progress):
+                try:
+                    await on_progress({"kind": "stage", "stage": "thinking"})
+                    await asyncio.Event().wait()
+                finally: cancelled.set()
+        stream = _design_events(PendingService(), DesignInput(text="coffee"))
+        assert "thinking" in await anext(stream)
+        await stream.aclose()
+        assert cancelled.is_set()
+    asyncio.run(run())
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -808,8 +881,14 @@ def test_provider_timeout_surfaces_504(
 # ---------------------------------------------------------------------------
 
 
-def test_openai_adapter_with_mock_transport():
+@pytest.mark.parametrize("base_url", ["http://llm.test/v1", "https://opencode.ai/inference/go/openai/v1"])
+@pytest.mark.parametrize("model,effort", [
+    ("grok-4.5", None), ("grok-4.5", "high"), ("deepseek-v4.1-flash", "max"),
+])
+def test_openai_adapter_with_mock_transport(base_url, model, effort, monkeypatch):
     import httpx
+    from design.config import load_design_config
+    from design.provider import build_provider
 
     captured: dict[str, Any] = {}
 
@@ -822,7 +901,7 @@ def test_openai_adapter_with_mock_transport():
         return httpx.Response(
             200,
             json={
-                "model": "grok-4.5",
+                "model": model,
                 "choices": [
                     {
                         "message": {
@@ -836,12 +915,12 @@ def test_openai_adapter_with_mock_transport():
         )
 
     transport = httpx.MockTransport(handler)
-    provider = OpenAICompatibleProvider(
-        base_url="http://llm.test/v1",
-        model="grok-4.5",
-        api_key="sk-secret-abc",
-        transport=transport,
-    )
+    monkeypatch.setenv("XBLOOM_LLM_BASE_URL", base_url)
+    monkeypatch.setenv("XBLOOM_LLM_MODEL", model)
+    monkeypatch.setenv("XBLOOM_LLM_API_KEY", "sk-secret-abc")
+    if effort:
+        monkeypatch.setenv("XBLOOM_LLM_REASONING_EFFORT", effort.upper())
+    provider = build_provider(load_design_config(), transport=transport)
 
     async def _run():
         from design.knowledge import KnowledgeBundle
@@ -863,8 +942,24 @@ def test_openai_adapter_with_mock_transport():
 
     result = asyncio.run(_run())
     assert result.parsed is not None
+    if effort is None:
+        assert "reasoning_effort" not in captured["body"]
+        assert "thinking" not in captured["body"]
+    else:
+        assert captured["body"]["reasoning_effort"] == effort
+    if model.startswith("deepseek-"):
+        assert captured["body"]["thinking"] == {"type": "enabled"}
+        assert "temperature" not in captured["body"]
+    else:
+        assert "thinking" not in captured["body"]
+        assert captured["body"]["temperature"] == 0.2
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"].get("authorization") == "Bearer sk-secret-abc"
+    assert captured["headers"]["user-agent"] == "xbloom-studio-web/1.3.0"
+    if base_url.startswith("https://opencode.ai/"):
+        assert len(captured["headers"]["x-opencode-session"]) == 32
+    else:
+        assert "x-opencode-session" not in captured["headers"]
     # Strict structured-output contract (do not weaken).
     rf = captured["body"]["response_format"]
     assert rf["type"] == "json_schema"
@@ -874,6 +969,14 @@ def test_openai_adapter_with_mock_transport():
     # Response object must not include the key
     assert "sk-secret" not in result.text
     asyncio.run(provider.aclose())
+
+
+def test_invalid_reasoning_effort_rejected(monkeypatch):
+    from design.config import load_design_config
+
+    monkeypatch.setenv("XBLOOM_LLM_REASONING_EFFORT", "typo")
+    with pytest.raises(ValueError, match="XBLOOM_LLM_REASONING_EFFORT"):
+        load_design_config()
 
 
 def test_openai_adapter_vision_sends_sanitized_image_only():
@@ -991,6 +1094,9 @@ def test_repair_succeeds_on_second_attempt(design_config: DesignConfig, knowledg
     assert body["validation"]["valid"] is True
     assert body["validation"]["repaired"] is True
     assert len(provider.calls) == 2
+    assert provider.calls[0].session_id == provider.calls[1].session_id
+    asyncio.run(service.design(DesignInput(text="a separate design")))
+    assert provider.calls[2].session_id != provider.calls[0].session_id
 
 
 # ---------------------------------------------------------------------------

@@ -22,10 +22,13 @@ _DEPLOY_ENV_CLEAR = (
     "XBLOOM_BIND_HOST",
     "XBLOOM_BIND_PORT",
     "XBLOOM_FRONTEND_DIR",
+    "XBLOOM_BRIDGE_MANAGED",
     # Design / knowledge (eager lifespan init when any of these are set)
     "XBLOOM_LLM_BASE_URL",
     "XBLOOM_LLM_PROVIDER",
     "XBLOOM_LLM_MODEL",
+    "XBLOOM_LLM_REASONING_EFFORT",
+    "XBLOOM_DESIGN_WEB_SEARCH",
     "XBLOOM_LLM_API_KEY",
     "XBLOOM_DESIGN_MODE",
     "XBLOOM_KNOWLEDGE_DIR",

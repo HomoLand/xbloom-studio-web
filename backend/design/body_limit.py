@@ -91,11 +91,7 @@ class DesignRequestBodyLimitMiddleware:
         while more_body:
             message = await receive()
             if message["type"] != "http.request":
-                # Unexpected (disconnect); forward empty body and continue.
-                async def _empty_receive() -> dict:
-                    return {"type": "http.request", "body": b"", "more_body": False}
-
-                await self.app(scope, _empty_receive, send)
+                # A disconnected upload must not start a paid generation.
                 return
             chunk = message.get("body", b"") or b""
             received += len(chunk)
@@ -115,7 +111,8 @@ class DesignRequestBodyLimitMiddleware:
             if not sent:
                 sent = True
                 return {"type": "http.request", "body": body, "more_body": False}
-            return {"type": "http.request", "body": b"", "more_body": False}
+            # StreamingResponse listens here for the real client disconnect.
+            return await receive()
 
         await self.app(scope, replay_receive, send)
 

@@ -3,7 +3,7 @@
  *
  * Mirrors packages/core/xbloom_catalog.py:
  * - PKCS#1 v1.5 RSA chunked form encrypt (public app key)
- * - Ephemeral login → sync / add / delete
+ * - Host-owned session (or ephemeral login for static builds) → sync / add / delete
  * - Update = delete then create (user requirement)
  *
  * Credentials are never written to localStorage by this module.
@@ -14,6 +14,8 @@
  */
 
 import type { CoffeeRecipeContent, RecipeContent } from "../api.ts";
+import { api } from "../api.ts";
+import { isStaticDeploy } from "./deploy.ts";
 import { isCoffeeContent, isTeaContent } from "./recipeDomain.ts";
 
 export const APP_RSA_PUBLIC_KEY_B64 =
@@ -74,6 +76,19 @@ export class CloudError extends Error {
     this.name = "CloudError";
     this.code = code;
   }
+}
+
+export function cloudErrorMessage(
+  error: unknown,
+  t: (key: "cloud.networkError" | "cloud.sessionExpired") => string,
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // Endpoint names such as tMemberLogin must not classify transport failures as auth.
+  if (/network|fetch|cors/i.test(message)) return t("cloud.networkError");
+  if (/\b(password|auth|login)\b|HTTP (401|403)\b/i.test(message)) {
+    return t("cloud.sessionExpired");
+  }
+  return message;
 }
 
 export type SessionForm = {
@@ -234,6 +249,9 @@ export async function cloudRequest(
   form: Record<string, unknown>,
   timeoutMs = 20_000,
 ): Promise<unknown> {
+  if (typeof form.hostSession === "string") {
+    return api.accountRequest(endpoint, form);
+  }
   const encrypted = appEncryptFormStrict(form);
   // Body is a JSON string of the base64 ciphertext (double-encoded like the app).
   const body = JSON.stringify(encrypted);
@@ -338,7 +356,14 @@ export async function loginEphemeral(opts: {
   region: string;
   languageType?: number;
   timeoutMs?: number;
-}): Promise<{ region: CloudRegion; session: SessionForm }> {
+}): Promise<{ region: CloudRegion; session: SessionForm | { hostSession: string; memberId: number } }> {
+  if (!isStaticDeploy()) {
+    const account = await api.accountStatus();
+    if (!account.configured || !account.region || !account.session) {
+      throw new CloudError("xBloom account login required; sign in in Settings");
+    }
+    return { region: account.region, session: account.session };
+  }
   if (!opts.email?.trim()) throw new CloudError("xBloom account email is required");
   if (!opts.password) throw new CloudError("xBloom account password is required");
   const region = normaliseRegion(opts.region);

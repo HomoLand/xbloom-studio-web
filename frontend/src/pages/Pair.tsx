@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import { Alert, Button, Field, TextInput } from "../components/ui";
+import { useI18n } from "../i18n/I18nContext";
 
 export default function Pair() {
   const navigate = useNavigate();
   const { refresh, markAuthenticated, status } = useAuth();
+  const { t } = useI18n();
   const [token, setToken] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,18 +20,18 @@ export default function Pair() {
       ? window.location.hash.slice(1)
       : window.location.hash;
     const params = new URLSearchParams(hash);
-    const t = params.get("token")?.trim() || "";
+    const tok = params.get("token")?.trim() || "";
     // Clear fragment immediately so the secret does not linger in the address bar.
     if (window.location.hash) {
       const clean = `${window.location.pathname}${window.location.search}`;
       window.history.replaceState(null, "", clean);
     }
-    if (!t) {
+    if (!tok) {
       setMissing(true);
       setToken(null);
       return;
     }
-    setToken(t);
+    setToken(tok);
     setMissing(false);
   }, []);
 
@@ -85,32 +87,27 @@ export default function Pair() {
           className="mx-auto mb-4 h-28 w-auto object-contain opacity-95"
           draggable={false}
         />
-        <h1 className="text-lg font-semibold text-ink">Pair this device</h1>
+        <h1 className="text-lg font-semibold text-ink">{t("pair.title")}</h1>
         <p className="mt-1 text-sm text-ink-muted">
-          Exchange a one-time pairing link for a session on this host.
+          {t("pair.subtitle")}
         </p>
       </div>
 
       <div className="rounded-2xl border border-line bg-surface p-4 space-y-4">
         {missing ? (
-          <Alert tone="amber" title="No pairing token">
-            Open a pairing link from Settings on a trusted machine, or paste a
-            fresh link into this browser.
+          <Alert tone="amber">
+            {t("pair.missingToken")}
           </Alert>
-        ) : (
-          <Alert tone="blue" title="Token ready">
-            Label this browser, then pair.
-          </Alert>
-        )}
+        ) : null}
 
         {error ? <Alert tone="red">{error}</Alert> : null}
 
-        <Field label="Device label" htmlFor="pair-label" hint="Shown in the sessions list">
+        <Field label={t("pair.deviceLabel")} htmlFor="pair-label">
           <TextInput
             id="pair-label"
             value={label}
             maxLength={128}
-            placeholder="Kitchen tablet"
+            placeholder={t("pair.devicePlaceholder")}
             onChange={(e) => setLabel(e.target.value)}
             disabled={busy}
           />
@@ -122,7 +119,7 @@ export default function Pair() {
           disabled={!canSubmit}
           onClick={() => void submit()}
         >
-          {busy ? "Pairing..." : "Pair device"}
+          {busy ? t("pair.pairing") : t("pair.submit")}
         </Button>
       </div>
     </div>

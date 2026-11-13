@@ -309,9 +309,9 @@ export function CoffeeEditor({
           />
         </Field>
         <Field
-          label="Bypass temp"
+          label={t("editor.bypassTemp")}
           htmlFor="coffee-bypass-temp"
-          hint="Number, RT, or BP"
+          hint={t("editor.bypassHint")}
           error={fieldErrors.bypass_temp_c}
         >
           <TextInput
@@ -543,6 +543,7 @@ export function TeaEditor({
   disabled,
   fieldErrors = {},
 }: TeaProps) {
+  const { t } = useI18n();
   const set = <K extends keyof TeaRecipeContent>(
     key: K,
     v: TeaRecipeContent[K],
@@ -579,7 +580,7 @@ export function TeaEditor({
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Name" htmlFor="tea-name" error={fieldErrors.name} className="sm:col-span-2">
+        <Field label={t("editor.name")} htmlFor="tea-name" error={fieldErrors.name} className="sm:col-span-2">
           <TextInput
             id="tea-name"
             value={value.name}
@@ -587,7 +588,7 @@ export function TeaEditor({
             onChange={(e) => set("name", e.target.value)}
           />
         </Field>
-        <Field label="Leaf (g)" htmlFor="tea-leaf" error={fieldErrors.leaf_g}>
+        <Field label={t("editor.leaf")} htmlFor="tea-leaf" error={fieldErrors.leaf_g}>
           <TextInput
             id="tea-leaf"
             type="number"
@@ -600,7 +601,7 @@ export function TeaEditor({
           />
         </Field>
         <Field
-          label="Output / steep (ml)"
+          label={t("editor.output")}
           htmlFor="tea-output"
           error={fieldErrors.output_ml_per_steep}
         >
@@ -621,7 +622,7 @@ export function TeaEditor({
       <div>
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-sm font-medium text-ink">
-            Steeps <span className="text-ink-faint">({value.pours.length}/4)</span>
+            {t("editor.steeps")} <span className="text-ink-faint">({value.pours.length}/4)</span>
           </h3>
           <Button
             size="sm"
@@ -630,31 +631,33 @@ export function TeaEditor({
             onClick={addPour}
           >
             <Plus className="h-3.5 w-3.5" aria-hidden />
-            Add steep
+            {t("editor.addSteep")}
           </Button>
         </div>
         <div className="space-y-2">
           {value.pours.map((p, i) => (
             <div key={i} className="rounded-2xl border border-line bg-surface-2 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-ink-muted">Steep {i + 1}</span>
+                <span className="text-xs font-medium text-ink-muted">
+                  {t("editor.steepNum").replace("{n}", String(i + 1))}
+                </span>
                 <div className="flex items-center gap-0.5">
                   <IconButton
-                    label="Move steep up"
+                    label="↑"
                     disabled={disabled || i === 0}
                     onClick={() => movePour(i, -1)}
                   >
                     <ArrowUp className="h-3.5 w-3.5" aria-hidden />
                   </IconButton>
                   <IconButton
-                    label="Move steep down"
+                    label="↓"
                     disabled={disabled || i === value.pours.length - 1}
                     onClick={() => movePour(i, 1)}
                   >
                     <ArrowDown className="h-3.5 w-3.5" aria-hidden />
                   </IconButton>
                   <IconButton
-                    label="Remove steep"
+                    label={t("editor.remove")}
                     disabled={disabled || value.pours.length <= 1}
                     onClick={() => removePour(i)}
                   >
@@ -662,15 +665,15 @@ export function TeaEditor({
                   </IconButton>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-                <Field label="Label">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                <Field label={t("editor.pourLabel")}>
                   <TextInput
                     value={p.label ?? ""}
                     disabled={disabled}
                     onChange={(e) => updatePour(i, { label: e.target.value })}
                   />
                 </Field>
-                <Field label="ml">
+                <Field label={t("editor.ml")}>
                   <TextInput
                     type="number"
                     min={40}
@@ -680,7 +683,7 @@ export function TeaEditor({
                     onChange={(e) => updatePour(i, { ml: num(e.target.value, p.ml) })}
                   />
                 </Field>
-                <Field label="Temp C">
+                <Field label={t("editor.temp")}>
                   <TextInput
                     type="number"
                     min={70}
@@ -692,7 +695,7 @@ export function TeaEditor({
                     }
                   />
                 </Field>
-                <Field label="Pattern">
+                <Field label={t("editor.pattern")}>
                   <Select
                     value={p.pattern}
                     disabled={disabled}
@@ -709,7 +712,7 @@ export function TeaEditor({
                     ))}
                   </Select>
                 </Field>
-                <Field label="Pause (s)">
+                <Field label={t("editor.steepSec")}>
                   <TextInput
                     type="number"
                     min={1}
@@ -721,7 +724,7 @@ export function TeaEditor({
                     }
                   />
                 </Field>
-                <Field label="Flow ml/s">
+                <Field label={t("editor.flow")}>
                   <TextInput
                     type="number"
                     min={3}

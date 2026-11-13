@@ -50,7 +50,7 @@ import {
   shortId,
 } from "../lib/recipeDomain";
 import {
-  CloudError,
+  cloudErrorMessage,
   fetchCloudBrewRecords,
   syncAccountCatalog,
 } from "../lib/xbloomCloud";
@@ -179,6 +179,23 @@ export default function Settings() {
   const [accError, setAccError] = useState<string | null>(null);
   const [accBusy, setAccBusy] = useState<string | null>(null);
   const [accReady, setAccReady] = useState(() => hasAccountCredentials());
+  useEffect(() => {
+    if (mode === "static") return;
+    let cancelled = false;
+    void getAccountCredentials().then((creds) => {
+      if (cancelled) return;
+      setAccReady(Boolean(creds));
+      if (creds) {
+        setAccEmail(creds.email);
+        setAccRegion(creds.region);
+        setAccPassword("");
+        clearSessionPassword();
+      }
+    }).catch((e) => {
+      if (!cancelled) setAccError(cloudErrorMessage(e, t));
+    });
+    return () => { cancelled = true; };
+  }, [mode, t]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -258,68 +275,63 @@ export default function Settings() {
     }
   };
 
-  const saveAccount = () => {
+  const saveAccount = async () => {
     setAccError(null);
+    setAccMsg(null);
     if (!accEmail.trim() || !accPassword) {
       setAccError(t("cloud.needCreds"));
       return;
     }
-    saveAccountSession({
-      email: accEmail,
-      password: accPassword,
-      region: accRegion,
-    });
-    setAccReady(true);
-    setAccMsg(t("settings.accountSaved"));
+    setAccBusy("login");
+    try {
+      await saveAccountSession({ email: accEmail, password: accPassword, region: accRegion });
+      if (mode !== "static") setAccPassword("");
+      setAccReady(true);
+      setAccMsg(t(mode === "static" ? "settings.accountSaved" : "settings.accountHostSaved"));
+    } catch (e) {
+      setAccError(cloudErrorMessage(e, t));
+    } finally {
+      setAccBusy(null);
+    }
   };
 
-  const clearAccount = () => {
-    clearSessionPassword();
-    writeAccountPrefs({ email: accEmail, region: accRegion });
-    setAccPassword("");
-    setAccReady(false);
-    setAccMsg(t("settings.accountCleared"));
+  const clearAccount = async () => {
     setAccError(null);
+    setAccMsg(null);
+    setAccBusy("logout");
+    try {
+      if (mode !== "static") await api.accountLogout();
+      clearSessionPassword();
+      writeAccountPrefs({ email: accEmail, region: accRegion });
+      setAccPassword("");
+      setAccReady(false);
+      setAccMsg(t(mode === "static" ? "settings.accountCleared" : "settings.accountHostCleared"));
+    } catch (e) {
+      setAccError(cloudErrorMessage(e, t));
+    } finally {
+      setAccBusy(null);
+    }
   };
 
   const runAccountAction = async (
     label: string,
-    fn: (creds: NonNullable<ReturnType<typeof getAccountCredentials>>) => Promise<string>,
+    fn: (creds: NonNullable<Awaited<ReturnType<typeof getAccountCredentials>>>) => Promise<string>,
   ) => {
     setAccError(null);
     setAccMsg(null);
-    // Persist current form first if filled
-    if (accEmail.trim() && accPassword) {
-      saveAccountSession({
-        email: accEmail,
-        password: accPassword,
-        region: accRegion,
-      });
-      setAccReady(true);
-    }
-    const creds = getAccountCredentials();
-    if (!creds) {
-      setAccError(t("cloud.needCreds"));
-      return;
-    }
     setAccBusy(label);
     try {
+      if (accEmail.trim() && accPassword) {
+        await saveAccountSession({ email: accEmail, password: accPassword, region: accRegion });
+        if (mode !== "static") setAccPassword("");
+      }
+      const creds = await getAccountCredentials();
+      setAccReady(Boolean(creds));
+      if (!creds) throw new Error(t("cloud.needSettings"));
       const msg = await fn(creds);
       setAccMsg(msg);
     } catch (e) {
-      const msg =
-        e instanceof CloudError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : String(e);
-      if (/password|auth|login|401|403/i.test(msg)) {
-        setAccError(t("cloud.sessionExpired"));
-      } else if (/network|fetch|cors|failed to fetch/i.test(msg)) {
-        setAccError(t("cloud.networkError"));
-      } else {
-        setAccError(msg);
-      }
+      setAccError(cloudErrorMessage(e, t));
     } finally {
       setAccBusy(null);
     }
@@ -334,7 +346,7 @@ export default function Settings() {
           mode !== "static" ? (
             <Button variant="secondary" size="sm" onClick={() => void doLogout()}>
               <LogOut className="h-3.5 w-3.5" aria-hidden />
-              Log out
+              {t("settings.logout")}
             </Button>
           ) : null
         }
@@ -342,7 +354,7 @@ export default function Settings() {
 
       <div className="space-y-4">
         <Panel title={t("settings.account")}>
-          <p className="mb-3 text-sm text-ink-muted">{t("settings.accountHint")}</p>
+          <p className="mb-3 text-sm text-ink-muted">{t(mode === "static" ? "settings.accountHint" : "settings.accountHostHint")}</p>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={t("cloud.email")} htmlFor="acc-email">
               <TextInput
@@ -360,7 +372,7 @@ export default function Settings() {
                 autoComplete="current-password"
                 value={accPassword}
                 onChange={(e) => setAccPassword(e.target.value)}
-                placeholder={t("cloud.passwordHint")}
+                placeholder={t(mode === "static" ? "cloud.passwordHint" : "settings.accountHostPassword")}
               />
             </Field>
             <Field label={t("cloud.region")} htmlFor="acc-region">
@@ -382,8 +394,8 @@ export default function Settings() {
             <div className="flex flex-wrap items-end gap-2">
               <StatusPill tone={accReady ? "green" : "neutral"}>
                 {accReady
-                  ? t("settings.accountSessionOn")
-                  : t("settings.accountSessionOff")}
+                  ? t(mode === "static" ? "settings.accountSessionOn" : "settings.accountHostOn")
+                  : t(mode === "static" ? "settings.accountSessionOff" : "settings.accountHostOff")}
               </StatusPill>
             </div>
           </div>
@@ -398,11 +410,11 @@ export default function Settings() {
             </Alert>
           ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button size="sm" variant="primary" onClick={saveAccount}>
-              {t("settings.accountSave")}
+            <Button size="sm" variant="primary" disabled={accBusy != null} onClick={() => void saveAccount()}>
+              {accBusy === "login" ? t("common.loading") : t(mode === "static" ? "settings.accountSave" : "settings.accountHostSave")}
             </Button>
-            <Button size="sm" variant="secondary" onClick={clearAccount}>
-              {t("settings.accountClear")}
+            <Button size="sm" variant="secondary" disabled={accBusy != null} onClick={() => void clearAccount()}>
+              {t(mode === "static" ? "settings.accountClear" : "settings.accountHostClear")}
             </Button>
             <Button
               size="sm"
@@ -818,8 +830,8 @@ export default function Settings() {
                   }
                   disabled={machineBusy}
                 >
-                  <option value="tank">tank</option>
-                  <option value="tap">tap</option>
+                  <option value="tank">{t("settings.waterTank")}</option>
+                  <option value="tap">{t("settings.waterTap")}</option>
                 </Select>
               </Field>
               <Field label={t("settings.display")}>
@@ -832,9 +844,9 @@ export default function Settings() {
                   }
                   disabled={machineBusy}
                 >
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
+                  <option value="low">{t("settings.displayLow")}</option>
+                  <option value="medium">{t("settings.displayMedium")}</option>
+                  <option value="high">{t("settings.displayHigh")}</option>
                 </Select>
               </Field>
             </div>
@@ -895,42 +907,42 @@ export default function Settings() {
             ) : null}
             <p className="mt-2 text-xs text-ink-muted">
               <Link to="/" className="text-brand hover:underline">
-                Dashboard
+                {t("nav.dashboard")}
               </Link>
             </p>
           </Panel>
         ) : null}
 
-        <Panel title="Host connection">
+        <Panel title={t("settings.host")}>
           <dl className="grid gap-2 text-sm sm:grid-cols-2">
-            <Row label="Mode" value={mode ?? "-"} />
+            <Row label={t("settings.hostMode")} value={mode ?? "-"} />
             <Row
-              label="Pairing required"
-              value={config?.pairing_required ? "Yes" : "No"}
+              label={t("settings.pairingRequired")}
+              value={config?.pairing_required ? t("settings.yes") : t("settings.no")}
             />
             <Row
-              label="Public origin"
+              label={t("settings.publicOrigin")}
               value={config?.public_origin ?? "-"}
             />
             <Row
-              label="Session TTL"
+              label={t("settings.sessionTtl")}
               value={
                 config ? `${Math.round(config.session_ttl_s / 3600)} h` : "-"
               }
             />
             <Row
-              label="This session"
+              label={t("settings.thisSession")}
               value={
                 session
-                  ? `${session.client_label || "unnamed"} | ${shortId(session.session_id, 10)}`
+                  ? `${session.client_label || t("settings.unnamedDevice")} | ${shortId(session.session_id, 10)}`
                   : mode === "loopback"
-                    ? "Loopback (no session gate)"
+                    ? t("settings.loopbackNoGate")
                     : "-"
               }
             />
             {session?.expires_at != null ? (
               <Row
-                label="Session expires"
+                label={t("settings.sessionExpires")}
                 value={formatEpochSeconds(session.expires_at)}
               />
             ) : null}
@@ -938,7 +950,7 @@ export default function Settings() {
         </Panel>
 
         <Panel
-          title="One-time pairing"
+          title={t("settings.pairingTitle")}
           action={
             <Button
               size="sm"
@@ -946,20 +958,19 @@ export default function Settings() {
               disabled={pairingBusy}
               onClick={() => void createPairing()}
             >
-              {pairingBusy ? "Creating..." : "Create pairing"}
+              {pairingBusy ? t("settings.pairingCreating") : t("settings.pairingCreate")}
             </Button>
           }
         >
           <p className="mb-3 text-sm text-ink-muted">
-            Generate a short-lived link for another browser. Scan the QR or open
-            the URL on the new device.
+            {t("settings.pairingHint")}
           </p>
-          <Field label="Optional label for the new device" htmlFor="pair-new-label">
+          <Field label={t("settings.pairingLabelField")} htmlFor="pair-new-label">
             <TextInput
               id="pair-new-label"
               value={pairingLabel}
               maxLength={128}
-              placeholder="Living room phone"
+              placeholder={t("settings.pairingLabelPlaceholder")}
               onChange={(e) => setPairingLabel(e.target.value)}
               disabled={pairingBusy}
             />
@@ -983,7 +994,9 @@ export default function Settings() {
               <div className="min-w-0 flex-1 space-y-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill tone={expired ? "red" : "amber"}>
-                    {expired ? "Expired" : `Expires in ${expiryLabel}`}
+                    {expired
+                      ? t("settings.pairingExpired")
+                      : t("settings.pairingExpiresIn").replace("{time}", expiryLabel ?? "")}
                   </StatusPill>
                   <StatusPill tone="neutral">
                     TTL ~{config?.pairing_ttl_s ?? 300}s
@@ -993,14 +1006,17 @@ export default function Settings() {
                   {pairing.pairing_url}
                 </div>
                 <p className="text-xs text-ink-faint">
-                  Pairing id {shortId(pairing.pairing_id, 12)}. Single-use.
+                  {t("settings.pairingSingleUse").replace(
+                    "{id}",
+                    shortId(pairing.pairing_id, 12),
+                  )}
                 </p>
                 <Button
                   size="sm"
                   variant="secondary"
                   onClick={() => setPairing(null)}
                 >
-                  Dismiss
+                  {t("settings.dismiss")}
                 </Button>
               </div>
             </div>
@@ -1008,9 +1024,9 @@ export default function Settings() {
         </Panel>
 
         <Panel
-          title="Sessions"
+          title={t("settings.sessionsTitle")}
           action={
-            <IconButton label="Refresh sessions" onClick={() => void loadSessions()}>
+            <IconButton label={t("settings.sessionsRefresh")} onClick={() => void loadSessions()}>
               <RefreshCw className="h-4 w-4" aria-hidden />
             </IconButton>
           }
@@ -1021,9 +1037,9 @@ export default function Settings() {
             </Alert>
           ) : null}
           {loadingSessions ? (
-            <Spinner label="Loading sessions" />
+            <Spinner label={t("common.loading")} />
           ) : sessions.length === 0 ? (
-            <p className="text-sm text-ink-muted">No active sessions listed.</p>
+            <p className="text-sm text-ink-muted">{t("settings.sessionsEmpty")}</p>
           ) : (
             <ul className="divide-y divide-line">
               {sessions.map((s) => (
@@ -1034,18 +1050,17 @@ export default function Settings() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
                       <span className="font-medium">
-                        {s.client_label || "Unnamed device"}
+                        {s.client_label || t("settings.unnamedDevice")}
                       </span>
-                      {s.current ? <StatusPill tone="green">Current</StatusPill> : null}
+                      {s.current ? (
+                        <StatusPill tone="green">{t("settings.currentSession")}</StatusPill>
+                      ) : null}
                     </div>
                     <div className="mt-0.5 text-xs text-ink-faint">
                       {shortId(s.session_id, 12)}
                       {s.client_ip ? ` | ${s.client_ip}` : ""}
                       {s.expires_at != null
-                        ? ` | expires ${formatEpochSeconds(s.expires_at)}`
-                        : ""}
-                      {s.last_seen_at != null
-                        ? ` | last seen ${formatEpochSeconds(s.last_seen_at)}`
+                        ? ` | ${formatEpochSeconds(s.expires_at)}`
                         : ""}
                     </div>
                   </div>
@@ -1055,7 +1070,7 @@ export default function Settings() {
                     onClick={() => void revoke(s.session_id)}
                   >
                     <Trash2 className="h-3.5 w-3.5" aria-hidden />
-                    Revoke
+                    {t("settings.revoke")}
                   </Button>
                 </li>
               ))}
@@ -1069,7 +1084,7 @@ export default function Settings() {
             className="underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/50"
             onClick={() => void refresh()}
           >
-            Refresh auth state
+            {t("settings.refreshAuth")}
           </button>
         </div>
       </div>

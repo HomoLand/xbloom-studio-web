@@ -17,12 +17,13 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import type { RecipeContent, RecipeRecord, RecipeRevision } from "../api";
+import { api, type RecipeContent, type RecipeRecord, type RecipeRevision } from "../api";
+import { isStaticDeploy } from "../lib/deploy";
 import {
   BrewConfirmDialog,
   type BrewTarget,
 } from "../components/BrewConfirmDialog";
-import { RecipeListItem } from "../components/RecipeListItem";
+import { RecipeCard } from "../components/RecipeCard";
 import { SlotProgrammer } from "../components/SlotProgrammer";
 import {
   Alert,
@@ -31,7 +32,7 @@ import {
   IconButton,
   PageHeader,
   Panel,
-  RecipeThumb,
+  Dialog,
   Segmented,
   Spinner,
   StatusPill,
@@ -39,6 +40,7 @@ import {
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
+import { mergeRecipeLibrary } from "../lib/recipeLibrary";
 import {
   importCloudSyncTargets,
   importShareLink,
@@ -83,7 +85,7 @@ import { useMachine } from "../machine/MachineContext";
 export default function Recipes() {
   const { t } = useI18n();
   const { driver } = useMachine();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [recipes, setRecipes] = useState<RecipeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,13 +100,23 @@ export default function Recipes() {
   const [query, setQuery] = useState("");
   const [shareInput, setShareInput] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const hostRecipes = useRef(new Map<string, RecipeRecord>());
 
-  const loadList = useCallback(() => {
+  const loadList = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
       const list = listAllLocalRecipes().map(toRecipeRecord);
-      setRecipes(list);
+      const remote: RecipeRecord[] = [];
+      if (!isStaticDeploy()) {
+        for (let offset = 0; ; offset += 500) {
+          const page = await api.listRecipes({ limit: 500, offset, include_archived: true });
+          remote.push(...page.recipes);
+          if (page.recipes.length < 500) break;
+        }
+      }
+      hostRecipes.current = new Map(remote.filter(recipe => !recipe.archived_at).map(recipe => [recipe.recipe_id, recipe]));
+      setRecipes(mergeRecipeLibrary(remote, list));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -115,6 +127,14 @@ export default function Recipes() {
   const openDetail = useCallback(
     (recipeId: string, opts?: { quietMissing?: boolean }) => {
       setSelectedId(recipeId);
+      const remote = hostRecipes.current.get(recipeId);
+      if (remote) {
+        setDetail(remote);
+        setLatest(remote.latest_revision ?? null);
+        setLocalEntry(null);
+        setError(null);
+        return;
+      }
       const entry = getLocalRecipe(recipeId);
       if (!entry) {
         setSelectedId(null);
@@ -141,10 +161,14 @@ export default function Recipes() {
 
   useEffect(() => {
     const sel = searchParams.get("selected");
-    if (sel) openDetail(sel);
-  }, [searchParams, openDetail]);
+    if (sel && !loading) openDetail(sel);
+  }, [searchParams, openDetail, loading]);
 
   const content: RecipeContent | null = latest?.content ?? null;
+  const closeDetail = () => {
+    setSelectedId(null); setDetail(null); setLatest(null); setLocalEntry(null);
+    if (searchParams.has("selected")) setSearchParams({}, { replace: true });
+  };
   const canBrewContent =
     content != null &&
     (isCoffeeContent(content) || isTeaContent(content));
@@ -178,8 +202,8 @@ export default function Recipes() {
     });
   }, [recipes, kindFilter, query]);
 
-  const requireCreds = () => {
-    const creds = getAccountCredentials();
+  const requireCreds = async () => {
+    const creds = await getAccountCredentials();
     if (!creds) throw new CloudError(t("cloud.needSettings"));
     return creds;
   };
@@ -219,7 +243,7 @@ export default function Recipes() {
 
   const onSync = () =>
     void runCloud("sync", async () => {
-      const creds = requireCreds();
+      const creds = await requireCreds();
       const result = await syncAccountCatalog({
         email: creds.email,
         password: creds.password,
@@ -255,7 +279,7 @@ export default function Recipes() {
 
   const onPush = () =>
     void runCloud("push", async () => {
-      const creds = requireCreds();
+      const creds = await requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
       const result = await pushCloudRecipe({
         email: creds.email,
@@ -293,7 +317,7 @@ export default function Recipes() {
 
   const onDeleteCloud = () =>
     void runCloud("delete", async () => {
-      const creds = requireCreds();
+      const creds = await requireCreds();
       const tableId = resolveOwnedTableId(localEntry);
       if (tableId == null || !isOwnedOnCloud(localEntry)) {
         throw new CloudError(t("cloud.needTableId"));
@@ -340,7 +364,7 @@ export default function Recipes() {
 
   const onCreateShare = () =>
     void runCloud("share-create", async () => {
-      const creds = requireCreds();
+      const creds = await requireCreds();
       const tableId = resolveOwnedTableId(localEntry);
       if (tableId == null) throw new CloudError(t("share.needTableId"));
       const result = await createCloudShareLink({
@@ -388,7 +412,7 @@ export default function Recipes() {
 
   const onUpdateCloud = () =>
     void runCloud("update", async () => {
-      const creds = requireCreds();
+      const creds = await requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
       const tableId = resolveOwnedTableId(localEntry);
       if (tableId == null || !isOwnedOnCloud(localEntry)) {
@@ -438,6 +462,18 @@ export default function Recipes() {
     loadList();
   };
 
+  const onArchiveHost = async () => {
+    if (!detail || !latest) return;
+    try {
+      await api.archiveRecipe(detail.recipe_id, latest.revision_id);
+      // Remove the former browser mirror, if this recipe predates hosted saves.
+      deleteUserRecipe(detail.recipe_id);
+      if (searchParams.get("selected") === detail.recipe_id) setSearchParams({}, { replace: true });
+      setSelectedId(null); setDetail(null); setLatest(null); setLocalEntry(null);
+      await loadList();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+
   const onImportFile = async (file: File) => {
     setError(null);
     setInfo(null);
@@ -477,13 +513,6 @@ export default function Recipes() {
         }
       />
 
-      <Alert tone="blue" className="mb-4">
-        {t("recipes.localMode")}{" "}
-        <Link to="/settings" className="text-brand hover:underline">
-          {t("cloud.openSettings")}
-        </Link>
-      </Alert>
-
       {error ? (
         <Alert tone="red" className="mb-4">
           {error}
@@ -495,72 +524,76 @@ export default function Recipes() {
         </Alert>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={cloudBusy != null}
-          onClick={onSync}
-        >
-          <Cloud className="h-3.5 w-3.5" aria-hidden />
-          {cloudBusy === "sync" ? t("common.loading") : t("cloud.sync")}
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() =>
-            downloadText(
-              `xbloom-recipes-${new Date().toISOString().slice(0, 10)}.json`,
-              exportRecipesJson(),
-            )
-          }
-        >
-          <Download className="h-3.5 w-3.5" aria-hidden />
-          {t("recipes.exportAll")}
-        </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => fileRef.current?.click()}
-        >
-          <Upload className="h-3.5 w-3.5" aria-hidden />
-          {t("recipes.import")}
-        </Button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void onImportFile(f);
-            e.target.value = "";
-          }}
-        />
-        <span className="text-xs text-ink-faint">{t("cloud.actionsUseSettings")}</span>
-      </div>
-
-      <div className="mb-4 flex flex-col gap-2 rounded-2xl border border-line bg-surface-2 p-3 sm:flex-row sm:items-center">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Link2 className="h-4 w-4 shrink-0 text-ink-faint" aria-hidden />
-          <TextInput
-            className="min-w-0 flex-1"
-            value={shareInput}
-            onChange={(e) => setShareInput(e.target.value)}
-            placeholder={t("share.importPlaceholder")}
-            aria-label={t("share.importPlaceholder")}
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={cloudBusy != null}
+            onClick={onSync}
+          >
+            <Cloud className="h-3.5 w-3.5" aria-hidden />
+            {cloudBusy === "sync" ? t("common.loading") : t("cloud.sync")}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              downloadText(
+                `xbloom-recipes-${new Date().toISOString().slice(0, 10)}.json`,
+                exportRecipesJson(recipes.filter(recipe => recipe.source !== "official" && recipe.latest_revision).map(recipe => ({
+                  recipe_id: recipe.recipe_id, name: recipe.name, kind: recipe.kind,
+                  source: recipe.source, content: recipe.latest_revision!.content,
+                }))),
+              )
+            }
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden />
+            {t("recipes.exportAll")}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => fileRef.current?.click()}
+          >
+            <Upload className="h-3.5 w-3.5" aria-hidden />
+            {t("recipes.import")}
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onImportFile(f);
+              e.target.value = "";
+            }}
           />
         </div>
-        <Button
-          size="sm"
-          variant="brand"
-          disabled={cloudBusy != null || !shareInput.trim()}
-          onClick={onImportShare}
-        >
-          {cloudBusy === "share-import"
-            ? t("common.loading")
-            : t("share.import")}
-        </Button>
+
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:max-w-md">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Link2 className="h-4 w-4 shrink-0 text-ink-faint" aria-hidden />
+            <TextInput
+              className="min-w-0 flex-1"
+              value={shareInput}
+              onChange={(e) => setShareInput(e.target.value)}
+              placeholder={t("share.importPlaceholder")}
+              aria-label={t("share.importPlaceholder")}
+            />
+          </div>
+          <Button
+            size="sm"
+            variant="brand"
+            disabled={cloudBusy != null || !shareInput.trim()}
+            onClick={onImportShare}
+          >
+            {cloudBusy === "share-import"
+              ? t("common.loading")
+              : t("share.import")}
+          </Button>
+        </div>
       </div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -583,7 +616,7 @@ export default function Recipes() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="space-y-4">
         <Panel
           title={`${t("recipes.title")}${
             filteredRecipes.length !== recipes.length
@@ -602,20 +635,17 @@ export default function Recipes() {
               showMachine={false}
             />
           ) : (
-            <ul className="space-y-1">
-              {filteredRecipes.map((r, idx) => {
-                const active = r.recipe_id === selectedId;
-                const source = String(r.source ?? "");
+            <ul className="grid items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="recipe-grid">
+              {filteredRecipes.map((r) => {
+                const source = r.source === "web-design" || r.latest_revision?.provenance?.source === "design" ? "design" : String(r.source ?? "");
                 const c = (r.latest_revision?.content ??
                   getLocalRecipe(r.recipe_id)?.content) as RecipeContent | null;
                 return (
-                  <li key={r.recipe_id}>
-                    <RecipeListItem
+                  <li key={r.recipe_id} className="min-w-0">
+                    {c ? <RecipeCard
                       name={r.name}
                       content={c}
-                      index={idx}
-                      active={active}
-                      onClick={() => openDetail(r.recipe_id)}
+                      compact
                       badge={
                         <StatusPill
                           tone={
@@ -637,7 +667,12 @@ export default function Recipes() {
                                 : t("recipes.user")}
                         </StatusPill>
                       }
-                    />
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="primary" size="sm" disabled={!r.latest_revision} onClick={() => setBrewTarget({ recipeRevisionId: r.latest_revision!.revision_id, content: c, recipeName: r.name })}><Play size={14} aria-hidden />{t("design.use")}</Button>
+                        <Button size="sm" onClick={() => openDetail(r.recipe_id)}>{t("recipeCard.details")}</Button>
+                      </div>
+                    </RecipeCard> : <Panel title={r.name}><Button size="sm" onClick={() => openDetail(r.recipe_id)}>{t("recipeCard.details")}</Button></Panel>}
                   </li>
                 );
               })}
@@ -645,13 +680,13 @@ export default function Recipes() {
           )}
         </Panel>
 
-        <Panel title={detail?.name ?? "—"}>
+        <Dialog open={selectedId != null} title={t("recipeCard.details")} onClose={closeDetail} busy={cloudBusy != null} size="lg">
           {!detail || !latest || !content ? (
             <p className="text-sm text-ink-muted">
               {selectedId ? t("common.loading") : t("recipes.selectHint")}
             </p>
           ) : (
-            <div className="space-y-4 text-sm">
+            <RecipeCard content={content} name={detail.name}>
               {localEntry?.share_author || localEntry?.share_link ? (
                 <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
                   {localEntry.share_author ? (
@@ -676,118 +711,26 @@ export default function Recipes() {
                   ) : null}
                 </div>
               ) : null}
-              <div className="flex items-start gap-3">
-                <RecipeThumb
-                  label={
-                    isCoffeeContent(content)
-                      ? /xpod/i.test(String(content.dripper || ""))
-                        ? "xPod"
-                        : "Omni"
-                      : "Tea"
-                  }
-                  pours={
-                    isCoffeeContent(content)
-                      ? content.pours.length
-                      : (content as { pours?: unknown[] }).pours?.length
-                  }
-                  index={Math.abs(
-                    detail.recipe_id.split("").reduce((a, c) => a + c.charCodeAt(0), 0),
-                  )}
-                  className="h-16 w-16"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="text-lg font-semibold tracking-tight text-ink">
-                    {detail.name}
-                  </div>
-                  <div className="mt-1 text-xs text-ink-faint">
-                    {detail.kind}
-                    {isOwnedOnCloud(localEntry)
-                      ? ` · ${t("recipes.onAccount")}`
-                      : localEntry?.source === "shared"
-                        ? ` · ${t("recipes.localOnly")}`
-                        : ""}
-                  </div>
-                </div>
-              </div>
-              <dl className="grid gap-2 rounded-2xl bg-surface-2 p-3 sm:grid-cols-3 text-ink-muted">
-                {isCoffeeContent(content) ? (
-                  <>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
-                        {t("recipes.dose")}
-                      </div>
-                      <div className="mt-0.5 text-base font-medium text-ink">
-                        {content.dose_g} g
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
-                        {t("recipes.grind")}
-                      </div>
-                      <div className="mt-0.5 text-base font-medium text-ink">
-                        {content.grind}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-ink-faint">
-                        {t("recipes.water")}
-                      </div>
-                      <div className="mt-0.5 text-base font-medium text-ink">
-                        {content.water_ml} ml
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="sm:col-span-3">{t("recipes.teaOnly")}</div>
-                )}
-              </dl>
-              {isCoffeeContent(content) && content.note ? (
-                <p className="text-xs text-ink-muted">{content.note}</p>
-              ) : null}
-              {isCoffeeContent(content) ? (
-                <div>
-                  <div className="mb-2 text-xs font-medium text-ink-muted">
-                    {t("recipes.pours")}
-                  </div>
-                  <div className="grid grid-cols-5 gap-1.5">
-                    {content.pours.map((p, i) => (
-                      <div
-                        key={i}
-                        className="flex flex-col items-center rounded-xl bg-surface-2 px-1 py-2 text-center"
-                      >
-                        <span className="text-sm font-semibold text-ink">
-                          {p.ml}ml
-                        </span>
-                        <span className="mt-1 text-[10px] text-ink-faint">
-                          {String(p.temp_c)}°
-                        </span>
-                        <span className="mt-0.5 truncate text-[10px] text-ink-muted">
-                          {p.label || `P${i + 1}`}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
               <div className="flex flex-wrap gap-2 pt-1">
                 <Button
                   variant="primary"
                   size="sm"
                   disabled={!canBrew}
-                  onClick={() =>
+                  onClick={() => {
                     setBrewTarget({
                       recipeRevisionId: latest.revision_id,
                       content,
                       recipeName: detail.name,
-                    })
-                  }
+                    });
+                    closeDetail();
+                  }}
                 >
                   <Play className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.brew")}
                   {driver === "bridge" ? ` · Bridge` : ""}
                 </Button>
                 <Link
-                  to={`/recipes/edit?id=${encodeURIComponent(detail.recipe_id)}`}
+                  to={`/recipes/edit?id=${encodeURIComponent(detail.recipe_id)}${hostRecipes.current.has(detail.recipe_id) ? "&host=1" : ""}`}
                   className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface-2 px-3 text-xs font-medium text-ink hover:bg-surface-3"
                 >
                   <Pencil className="h-3.5 w-3.5" aria-hidden />
@@ -872,6 +815,7 @@ export default function Recipes() {
                     </Button>
                   </>
                 ) : null}
+                {hostRecipes.current.has(detail.recipe_id) ? <Button size="sm" variant="secondary" onClick={() => void onArchiveHost()}>{t("recipes.archive")}</Button> : null}
                 {localEntry && localEntry.source !== "official" ? (
                   <Button
                     variant="secondary"
@@ -900,12 +844,12 @@ export default function Recipes() {
                   </p>
                 ) : null}
               </div>
-            </div>
+            </RecipeCard>
           )}
-        </Panel>
+        </Dialog>
       </div>
 
-      <SlotProgrammer />
+      <SlotProgrammer recipes={recipes} />
 
       <BrewConfirmDialog
         open={brewTarget != null}

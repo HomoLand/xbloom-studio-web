@@ -10,6 +10,7 @@ enforce the total request timeout. Text mode never sends image bytes.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -30,7 +31,7 @@ from design.image_processing import SanitizedImage, sanitize_image
 from design.knowledge import KnowledgeBundle, load_knowledge_bundle
 from design.ocr import OcrAdapter, default_ocr_adapter
 from design.prompts import DesignPrompt, build_design_prompt, build_repair_prompt
-from design.provider import DesignProvider, ProviderRequest, build_provider
+from design.provider import DesignProvider, ProgressCallback, ProviderRequest, build_provider
 from design.schema import schema_version
 from design.validation import ValidationResult, validate_design_document
 
@@ -140,12 +141,12 @@ class DesignService:
         _ = knowledge.version
         _ = provider.name
 
-    async def design(self, design_input: DesignInput) -> dict[str, Any]:
+    async def design(self, design_input: DesignInput, on_progress: ProgressCallback | None = None) -> dict[str, Any]:
         """Run a full design request and return the public response body."""
 
         try:
             return await asyncio.wait_for(
-                self._design_inner(design_input),
+                self._design_inner(design_input, on_progress),
                 timeout=self.config.timeout_s,
             )
         except asyncio.TimeoutError as exc:
@@ -154,7 +155,7 @@ class DesignService:
                 details={"timeout_s": self.config.timeout_s},
             ) from exc
 
-    async def _design_inner(self, design_input: DesignInput) -> dict[str, Any]:
+    async def _design_inner(self, design_input: DesignInput, on_progress: ProgressCallback | None = None) -> dict[str, Any]:
         if not isinstance(design_input.text, str):
             raise DesignValidationError("text must be a string", code="invalid_request")
 
@@ -165,8 +166,24 @@ class DesignService:
         sanitized: SanitizedImage | None = None
         ocr_text: str | None = None
         image_for_provider: SanitizedImage | None = None
+        public_text = ""
+        last_draft: dict[str, str] = {}
+
+        async def progress(event: dict[str, Any]) -> None:
+            nonlocal public_text, last_draft
+            if on_progress is None:
+                return
+            if event.get("kind") == "output":
+                public_text += event["text"]
+                draft = _completed_draft_fields(public_text)
+                if not draft or draft == last_draft:
+                    return
+                last_draft = draft
+                event = {"kind": "draft", **draft}
+            await on_progress(redact_public_value(event, api_key=self.config.api_key))
 
         try:
+            await progress({"kind": "stage", "stage": "preparing"})
             if design_input.image_bytes is not None:
                 # Offload CPU-bound decode/sanitize so the event loop can honor timeouts.
                 sanitized = await asyncio.to_thread(self._sanitize_optional_image, design_input)
@@ -200,13 +217,14 @@ class DesignService:
             )
 
             # First provider attempt.
-            first = await provider.complete(
-                ProviderRequest(
-                    prompt=prompt,
-                    image=image_for_provider,
-                    timeout_s=self.config.provider_timeout_s,
-                )
+            provider_request = ProviderRequest(
+                prompt=prompt,
+                image=image_for_provider,
+                timeout_s=self.config.provider_timeout_s,
+                on_progress=progress if on_progress else None,
             )
+            first = await provider.complete(provider_request)
+            await progress({"kind": "stage", "stage": "validating"})
             # Clear image reference ASAP after first call; repair may still need it in vision.
             result = validate_design_document(first.text, first.parsed)
             repaired = False
@@ -214,6 +232,9 @@ class DesignService:
             provider_name = first.provider or provider.name
 
             if not result.valid:
+                public_text = ""
+                last_draft = {}
+                await progress({"kind": "stage", "stage": "repairing"})
                 # Single constrained repair attempt only.
                 repair_prompt = build_repair_prompt(
                     original=prompt,
@@ -225,15 +246,19 @@ class DesignService:
                         prompt=repair_prompt,
                         image=image_for_provider if mode == "vision" else None,
                         timeout_s=self.config.provider_timeout_s,
+                        session_id=provider_request.session_id,
+                        on_progress=progress if on_progress else None,
+                        web_sources=first.web_sources,
                     )
                 )
+                await progress({"kind": "stage", "stage": "validating"})
                 repaired_result = validate_design_document(second.text, second.parsed)
                 repaired = True
                 result = repaired_result
                 provider_model = second.model or provider_model
                 provider_name = second.provider or provider_name
 
-            return self._build_response(
+            response = self._build_response(
                 result=result,
                 knowledge=knowledge,
                 prompt=prompt,
@@ -244,6 +269,11 @@ class DesignService:
                 used_image=image_for_provider is not None,
                 used_ocr=ocr_text is not None,
             )
+            if self.config.web_search:
+                response["web_sources"] = redact_public_value([
+                    {k: v for k, v in source.items() if k != "content"} for source in first.web_sources
+                ], api_key=self.config.api_key)
+            return response
         finally:
             # Drop large buffers; never persist.
             sanitized = None
@@ -291,6 +321,37 @@ class DesignService:
             "provenance": provenance,
         }
         return _redact_public_response(body, api_key=self.config.api_key)
+
+
+def _completed_draft_fields(text: str) -> dict[str, str]:
+    """Read complete top-level JSON values; never publish incomplete/unvalidated recipes."""
+    decoder = json.JSONDecoder()
+    pos = 0
+    result: dict[str, str] = {}
+    text = text.lstrip()
+    if not text.startswith("{"):
+        return result
+    pos = 1
+    try:
+        while pos < len(text):
+            while pos < len(text) and text[pos] in " \r\n\t,":
+                pos += 1
+            key, pos = decoder.raw_decode(text, pos)
+            while pos < len(text) and text[pos].isspace():
+                pos += 1
+            if pos >= len(text) or text[pos] != ":":
+                break
+            pos += 1
+            while pos < len(text) and text[pos].isspace():
+                pos += 1
+            value, pos = decoder.raw_decode(text, pos)
+            if key == "design_rationale" and isinstance(value, str):
+                result["rationale"] = value[:2000]
+            if key == "recipe_candidate" and isinstance(value, dict) and isinstance(value.get("name"), str):
+                result["name"] = value["name"][:200]
+    except (ValueError, json.JSONDecodeError):
+        pass
+    return result
 
 
 def redact_public_string(value: str, *, api_key: str = "") -> str:

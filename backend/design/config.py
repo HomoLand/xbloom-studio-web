@@ -76,6 +76,8 @@ class DesignConfig:
     base_url: str = ""
     model: str = DEFAULT_MODEL
     api_key: str = field(default="", repr=False)
+    reasoning_effort: str | None = None
+    web_search: bool = False
     design_mode: str = DEFAULT_DESIGN_MODE
     knowledge_dir: str | None = None
     knowledge_dev_root: str | None = None
@@ -98,6 +100,8 @@ class DesignConfig:
             "provider": self.provider,
             "base_url": self.base_url,
             "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+            "web_search": self.web_search,
             "api_key_configured": bool(self.api_key),
             "design_mode": self.design_mode,
             "knowledge_dir_set": bool(self.knowledge_dir),
@@ -123,6 +127,14 @@ def load_design_config() -> DesignConfig:
     model = _env("XBLOOM_LLM_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
     base_url = _env("XBLOOM_LLM_BASE_URL", "") or ""
     api_key = os.environ.get("XBLOOM_LLM_API_KEY", "")  # preserve exact secret value
+    reasoning_effort = _env("XBLOOM_LLM_REASONING_EFFORT")
+    web_search = _env("XBLOOM_DESIGN_WEB_SEARCH", "0")
+    if web_search not in {"0", "1"}:
+        raise ValueError("XBLOOM_DESIGN_WEB_SEARCH must be '0' or '1'")
+    if reasoning_effort is not None:
+        reasoning_effort = reasoning_effort.lower()
+        if reasoning_effort not in {"low", "high", "max"}:
+            raise ValueError("XBLOOM_LLM_REASONING_EFFORT must be 'low', 'high', or 'max'")
     design_mode = (_env("XBLOOM_DESIGN_MODE", DEFAULT_DESIGN_MODE) or DEFAULT_DESIGN_MODE).lower()
     if design_mode not in {"vision", "text"}:
         raise ValueError("XBLOOM_DESIGN_MODE must be 'vision' or 'text'")
@@ -140,6 +152,8 @@ def load_design_config() -> DesignConfig:
         base_url=base_url.rstrip("/"),
         model=model,
         api_key=api_key,
+        reasoning_effort=reasoning_effort,
+        web_search=web_search == "1",
         design_mode=design_mode,
         knowledge_dir=_env("XBLOOM_KNOWLEDGE_DIR"),
         knowledge_dev_root=_env("XBLOOM_KNOWLEDGE_DEV_ROOT"),

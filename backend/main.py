@@ -39,6 +39,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+import bridge_client
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -49,7 +50,7 @@ from design.routes import (
     initialize_design_at_startup,
     router as design_router,
 )
-from routes import catalog, device, history, recipes
+from routes import account, catalog, device, history, recipes
 from web_security import (
     CORS_ALLOW_HEADERS,
     CORS_ALLOW_METHODS,
@@ -120,6 +121,9 @@ async def _ensure_bridge_daemon() -> None:
     not killed by a backend restart or crash.
     """
 
+    # A service manager owns restarts; never spawn a bridge in the HTTP service.
+    if not bridge_client.client.auto_ensure:
+        return
     try:
         result = await asyncio.to_thread(ensure_bridge_daemon)
     except Exception:
@@ -205,6 +209,7 @@ def create_app(
         return {"status": "ok"}
 
     application.include_router(auth_router)
+    application.include_router(account.router)
     application.include_router(device.router)
     application.include_router(recipes.router)
     application.include_router(catalog.router)

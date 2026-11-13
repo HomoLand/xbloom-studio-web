@@ -4,7 +4,7 @@
  */
 
 export function isStaticDeploy(): boolean {
-  return import.meta.env.VITE_STATIC === "1";
+  return import.meta.env?.VITE_STATIC === "1";
 }
 
 /** Vite base path, e.g. `/xbloom-studio-web/` on GitHub Pages. */

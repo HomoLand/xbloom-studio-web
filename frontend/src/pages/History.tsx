@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Cloud, Download, Play, Trash2 } from "lucide-react";
 import {
   BrewConfirmDialog,
@@ -40,7 +40,7 @@ import {
   toLatestRevision,
 } from "../lib/localRecipes";
 import { downloadText } from "../lib/recipeIo";
-import { CloudError, fetchCloudBrewRecords } from "../lib/xbloomCloud";
+import { cloudErrorMessage, fetchCloudBrewRecords } from "../lib/xbloomCloud";
 import { shortId } from "../lib/recipeDomain";
 
 const OUTCOME_TONE: Record<
@@ -100,13 +100,10 @@ export default function History() {
   const onSyncCloud = async () => {
     setError(null);
     setInfo(null);
-    const creds = getAccountCredentials();
-    if (!creds) {
-      setError(t("cloud.needSettings"));
-      return;
-    }
     setBusy(true);
     try {
+      const creds = await getAccountCredentials();
+      if (!creds) throw new Error(t("cloud.needSettings"));
       const result = await fetchCloudBrewRecords({
         email: creds.email,
         password: creds.password,
@@ -123,20 +120,7 @@ export default function History() {
       );
       reload();
     } catch (e) {
-      const msg =
-        e instanceof CloudError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : String(e);
-      // Friendlier session / network hints for ordinary users.
-      if (/password|auth|login|401|403/i.test(msg)) {
-        setError(t("cloud.sessionExpired"));
-      } else if (/network|fetch|cors|failed to fetch/i.test(msg)) {
-        setError(t("cloud.networkError"));
-      } else {
-        setError(msg);
-      }
+      setError(cloudErrorMessage(e, t));
     } finally {
       setBusy(false);
     }
@@ -231,13 +215,6 @@ export default function History() {
           </div>
         }
       />
-
-      <Alert tone="blue" className="mb-4">
-        {t("history.localMode")}{" "}
-        <Link to="/settings" className="text-brand hover:underline">
-          {t("cloud.openSettings")}
-        </Link>
-      </Alert>
 
       {error ? (
         <Alert tone="red" className="mb-4">

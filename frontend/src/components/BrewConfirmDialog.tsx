@@ -5,10 +5,8 @@ import {
   ApiError,
   newRequestId,
   startConfirmationForKind,
-  type CoffeeRecipeContent,
   type RecipeContent,
   type RecipeRevision,
-  type TeaRecipeContent,
 } from "../api";
 import {
   isCoffeeContent,
@@ -21,6 +19,7 @@ import { persistWorkflow } from "../lib/workflowStore";
 import { useI18n } from "../i18n/I18nContext";
 import { useMachine } from "../machine/MachineContext";
 import { Alert, Button, Dialog } from "./ui";
+import { RecipeCard } from "./RecipeCard";
 
 export type BrewTarget = {
   recipeRevisionId: string;
@@ -320,58 +319,29 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
       size="lg"
     >
       <div className="space-y-4">
-        <p className="text-sm text-ink-muted">
-          {webBle ? t("brew.webBleHint") : t("brew.bridgeHint")}
-        </p>
-
         {webBle ? (
-          <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-            {t("settings.webBle")} · {tPhase(bleSnapshot.phase)}
-            {bleSnapshot.machineStateName
-              ? ` · ${tStatus(bleSnapshot.machineStateName)}`
-              : ""}
-            {bleSnapshot.cupWeightG != null
-              ? ` · ${bleSnapshot.cupWeightG} g`
-              : ""}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
+            <span>
+              {t("settings.webBle")} · {tPhase(bleSnapshot.phase)}
+              {bleSnapshot.machineStateName
+                ? ` · ${tStatus(bleSnapshot.machineStateName)}`
+                : ""}
+              {bleSnapshot.cupWeightG != null
+                ? ` · ${bleSnapshot.cupWeightG} g`
+                : ""}
+            </span>
             {kind === "tea" ? (
-              <div className="mt-1 text-ink-faint">{t("brew.teaPhysHint")}</div>
+              <span className="text-ink-faint">{t("brew.teaPhysHint")}</span>
             ) : null}
           </div>
         ) : null}
 
-        <div className="text-sm">
-          <div className="font-medium text-ink">{name}</div>
-          <div className="mt-1 text-xs text-ink-muted">
-            {t("brew.revision")}{" "}
-            <code className="text-ink">{shortId(target.recipeRevisionId, 14)}</code>
-            {" · "}
-            {t("brew.kind")} <span className="text-ink">{kind}</span>
-          </div>
-          <RecipeSnapshot content={content} />
-        </div>
+        <RecipeCard content={content} name={name} />
 
         <Alert tone="red">
-          <div className="space-y-1.5 text-sm">
-            <div className="font-medium">{t("brew.safetyTitle")}</div>
-            <ul className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed">
-              {(kind === "tea"
-                ? [
-                    t("brew.safetyTea1"),
-                    t("brew.safetyTea2"),
-                    t("brew.safetyTea3"),
-                    t("brew.safetyTea4"),
-                  ]
-                : [
-                    t("brew.safetyCoffee1"),
-                    t("brew.safetyCoffee2"),
-                    t("brew.safetyCoffee3"),
-                    t("brew.safetyCoffee4"),
-                  ]
-              ).map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            <p className="pt-0.5 text-xs opacity-90">{t("brew.safetyFooter")}</p>
+          <div className="text-xs leading-relaxed">
+            <span className="font-medium">{t("brew.safetyTitle")}：</span>
+            {t("brew.safetyFooter")}
           </div>
         </Alert>
 
@@ -429,81 +399,6 @@ export function BrewConfirmDialog({ open, target, onClose, onStarted }: Props) {
   );
 }
 
-function RecipeSnapshot({ content }: { content: RecipeContent }) {
-  if (isTeaContent(content)) {
-    return <TeaSnapshot content={content} />;
-  }
-  return <CoffeeSnapshot content={content as CoffeeRecipeContent} />;
-}
-
-function CoffeeSnapshot({ content }: { content: CoffeeRecipeContent }) {
-  return (
-    <div className="mt-2 space-y-2 text-xs text-ink-muted">
-      <div className="grid gap-1 sm:grid-cols-2">
-        <div>Style {content.kind}</div>
-        {content.dripper ? <div>Dripper {content.dripper}</div> : null}
-        <div>Dose {content.dose_g} g</div>
-        <div>Grind {content.grind}</div>
-        <div>Ratio {content.ratio}</div>
-        <div>Water {content.water_ml} ml</div>
-        {content.hot_water_ml != null ? (
-          <div>Hot water {content.hot_water_ml} ml</div>
-        ) : null}
-        {content.bypass_ml != null ? <div>Bypass {content.bypass_ml} ml</div> : null}
-        {content.bypass_temp_c != null ? (
-          <div>Bypass temp {String(content.bypass_temp_c)}</div>
-        ) : null}
-        {content.ice_g != null ? <div>Ice {content.ice_g} g</div> : null}
-        {content.time ? <div>Time {content.time}</div> : null}
-        {content.note ? <div className="sm:col-span-2">Note {content.note}</div> : null}
-      </div>
-      <div>
-        <div className="mb-1 font-medium text-ink">Pours ({content.pours.length})</div>
-        <ol className="space-y-1">
-          {content.pours.map((p, i) => (
-            <li
-              key={i}
-              className="rounded-md border border-line bg-surface px-2 py-1.5 text-ink"
-            >
-              <span className="text-ink-faint">{i + 1}.</span>{" "}
-              {p.label || `Pour ${i + 1}`}: {p.ml} ml, temp {String(p.temp_c)},{" "}
-              {p.pattern}, pause {p.pause_s}s, {p.rpm} rpm, {p.flow_ml_s} ml/s
-              {p.vibration && p.vibration !== "none"
-                ? `, vibration ${p.vibration}`
-                : ""}
-            </li>
-          ))}
-        </ol>
-      </div>
-    </div>
-  );
-}
-
-function TeaSnapshot({ content }: { content: TeaRecipeContent }) {
-  return (
-    <div className="mt-2 space-y-2 text-xs text-ink-muted">
-      <div className="grid gap-1 sm:grid-cols-2">
-        <div>Leaf {content.leaf_g} g</div>
-        <div>Output {content.output_ml_per_steep} ml / steep</div>
-      </div>
-      <div>
-        <div className="mb-1 font-medium text-ink">Steeps ({content.pours.length})</div>
-        <ol className="space-y-1">
-          {content.pours.map((p, i) => (
-            <li
-              key={i}
-              className="rounded-md border border-line bg-surface px-2 py-1.5 text-ink"
-            >
-              <span className="text-ink-faint">{i + 1}.</span>{" "}
-              {p.label || `Steep ${i + 1}`}: {p.ml} ml, {p.temp_c} C, {p.pattern},
-              pause {p.pause_s}s, {p.flow_ml_s} ml/s
-            </li>
-          ))}
-        </ol>
-      </div>
-    </div>
-  );
-}
 
 type ClassifiedFailure = {
   message: string;

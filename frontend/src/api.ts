@@ -348,7 +348,7 @@ function isPairExchange(path: string, method: string): boolean {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  opts?: { json?: boolean; csrfExempt?: boolean },
+  opts?: { json?: boolean; csrfExempt?: boolean; raw?: boolean },
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -401,6 +401,7 @@ async function request<T>(
     throw await parseApiError(res);
   }
 
+  if (opts?.raw) return res as T;
   if (res.status === 204) {
     return undefined as T;
   }
@@ -497,6 +498,8 @@ export type DesignPublicConfig = {
   provider: string;
   model: string;
   design_mode: DesignMode;
+  reasoning_effort: string | null;
+  web_search: boolean;
   image_data_fate: DesignImageDataFate;
 };
 
@@ -541,7 +544,10 @@ export type DesignResult = {
   evidence: DesignEvidenceItem[];
   validation: DesignValidation;
   provenance: DesignProvenance;
+  web_sources?: DesignSource[];
 };
+
+export type DesignSource = { title: string; url: string; summary: string };
 
 export type DesignJsonRequest = {
   text: string;
@@ -898,7 +904,22 @@ export function startConfirmationForKind(kind: "coffee" | "tea"): string {
 // API surface
 // ---------------------------------------------------------------------------
 
+export type HostAccountStatus = {
+  configured: boolean;
+  email?: string;
+  region?: "china" | "international";
+  languageType?: number;
+  saved_at?: string;
+  session?: { hostSession: string; memberId: number };
+};
+
 export const api = {
+  accountStatus: () => get<HostAccountStatus>("/account/status"),
+  accountLogin: (input: { email: string; password: string; region: string; languageType?: number }) =>
+    postJson<HostAccountStatus>("/account/login", input),
+  accountLogout: () => postJson<HostAccountStatus>("/account/logout", {}),
+  accountRequest: (endpoint: string, form: Record<string, unknown>) =>
+    postJson<unknown>("/account/request", { endpoint, form }),
   // Health
   health: () => get<{ status: string }>("/health"),
 
@@ -938,6 +959,10 @@ export const api = {
   designConfig: () => get<DesignPublicConfig>("/design/config"),
   designJson: (body: DesignJsonRequest) => postJson<DesignResult>("/design", body),
   designMultipart: (form: FormData) => postForm<DesignResult>("/design", form),
+  designStream: (form: FormData, signal: AbortSignal) => request<Response>(
+    "/design", { method: "POST", body: form, signal, headers: { Accept: "text/event-stream" } },
+    { json: false, raw: true },
+  ),
 
   // Recipes (content / revision ids only - no paths)
   listRecipes: (params?: {

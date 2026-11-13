@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import json
+from contextlib import suppress
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -174,6 +177,8 @@ class DesignConfigResponse(BaseModel):
     provider: str
     model: str
     design_mode: Literal["vision", "text"]
+    reasoning_effort: str | None
+    web_search: bool
     image_data_fate: DesignImageDataFate
 
 
@@ -213,6 +218,8 @@ def design_public_config() -> DesignConfigResponse | JSONResponse:
             provider=cfg.provider,
             model=cfg.model,
             design_mode=design_mode,
+            reasoning_effort=cfg.reasoning_effort,
+            web_search=cfg.web_search,
             image_data_fate=DesignImageDataFate(
                 original_image_stored=False,
                 when_image_attached=DesignImageWhenAttached(
@@ -319,6 +326,9 @@ async def design_recipe(request: Request) -> Any:
             )
 
         service = get_design_service()
+        if "text/event-stream" in request.headers.get("accept", ""):
+            return StreamingResponse(_design_events(service, design_input), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
         result = await service.design(design_input)
         return result
     except DesignError as exc:
@@ -330,6 +340,36 @@ async def design_recipe(request: Request) -> Any:
             redact_public_string(exc.message, api_key=_api_key_for_redaction()),
         )
         return _error_response(exc)
+
+
+async def _design_events(service: DesignService, design_input: DesignInput):
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=16)
+
+    async def run() -> None:
+        try:
+            result = await service.design(design_input, on_progress=queue.put)
+            await queue.put({"kind": "result", "result": result})
+        except DesignError as exc:
+            await queue.put({"kind": "error", **redact_public_value(exc.to_body(), api_key=service.config.api_key)})
+        except Exception:
+            # No provider body, secret or local path in stream errors.
+            await queue.put({"kind": "error", "error": {"message": "Recipe generation failed", "code": "design_failed"}})
+
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=10)
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+            if event["kind"] in {"result", "error"}:
+                break
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 async def _parse_json_request(request: Request) -> DesignInput:
