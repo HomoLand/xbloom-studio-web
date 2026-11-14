@@ -628,6 +628,12 @@ export type RecipeValidateResult =
       };
     };
 
+export type CloudSyncMeta = {
+  table_id: number;
+  region: "china" | "international";
+  share_link?: string | null;
+};
+
 export type RecipeRecord = {
   recipe_id: string;
   name: string;
@@ -636,7 +642,11 @@ export type RecipeRecord = {
   archived_at?: string | null;
   created_at?: string;
   updated_at?: string;
-  metadata?: { tags?: string[]; [key: string]: unknown } | null;
+  metadata?: {
+    tags?: string[];
+    cloud_sync?: CloudSyncMeta | null;
+    [key: string]: unknown;
+  } | null;
   latest_revision?: RecipeRevision | null;
   [key: string]: unknown;
 };
@@ -1032,6 +1042,18 @@ export const api = {
     postJson<{ recipe: RecipeRecord }>(
       `/recipes/${encodeURIComponent(recipeId)}/restore`,
       { expected_latest_revision_id: expectedLatestRevisionId },
+    ),
+  setRecipeCloudMeta: (
+    recipeId: string,
+    body: {
+      table_id: number | null;
+      region?: "china" | "international" | null;
+      share_link?: string | null;
+    },
+  ) =>
+    postJson<{ recipe: RecipeRecord }>(
+      `/recipes/${encodeURIComponent(recipeId)}/cloud-meta`,
+      body,
     ),
   templates: () => get<TemplatesResult>("/recipes/templates"),
 

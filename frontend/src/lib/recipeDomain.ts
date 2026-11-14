@@ -29,6 +29,34 @@ export function contentIdentity(content: RecipeContent): string {
   return JSON.stringify(content);
 }
 
+export const DEFAULT_GRINDER_RPM = 90;
+export const GRINDER_RPM_OPTIONS = [60, 70, 80, 90, 100, 110, 120] as const;
+
+export function coffeeGrinderRpm(pours: CoffeePour[]): number {
+  const found =
+    pours.find((p) => p.pattern !== "center" && Number(p.rpm) > 0) ??
+    pours.find((p) => Number(p.rpm) > 0);
+  if (!found) return DEFAULT_GRINDER_RPM;
+  return Math.min(120, Math.max(60, Math.round(Number(found.rpm) / 10) * 10));
+}
+
+export function applyCoffeeGrinderRpm(
+  content: CoffeeRecipeContent,
+  rpm?: number,
+): CoffeeRecipeContent {
+  const target =
+    rpm != null
+      ? Math.min(120, Math.max(60, Math.round(rpm / 10) * 10))
+      : coffeeGrinderRpm(content.pours);
+  return {
+    ...content,
+    pours: content.pours.map((p) => ({
+      ...p,
+      rpm: p.pattern === "center" ? 0 : target,
+    })),
+  };
+}
+
 export function defaultCoffeePour(index: number): CoffeePour {
   return {
     label: index === 0 ? "Bloom" : `Pour ${index + 1}`,
@@ -64,7 +92,11 @@ export function defaultCoffeeRecipe(): CoffeeRecipeContent {
     water_ml: 240,
     hot_water_ml: 240,
     note: "",
-    pours: [defaultCoffeePour(0), defaultCoffeePour(1)],
+    pours: [
+      { ...defaultCoffeePour(0), ml: 45 },
+      { ...defaultCoffeePour(1), ml: 100 },
+      { ...defaultCoffeePour(2), ml: 95 },
+    ],
   };
 }
 

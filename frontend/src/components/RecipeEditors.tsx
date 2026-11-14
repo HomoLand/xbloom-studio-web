@@ -8,8 +8,11 @@ import type {
 } from "../api";
 import { useI18n } from "../i18n/I18nContext";
 import {
+  applyCoffeeGrinderRpm,
+  coffeeGrinderRpm,
   defaultCoffeePour,
   defaultTeaPour,
+  GRINDER_RPM_OPTIONS,
   POUR_PATTERNS,
   VIBRATIONS,
 } from "../lib/recipeDomain";
@@ -116,22 +119,6 @@ function TempInputField({
   );
 }
 
-/** RPM: center pattern requires 0 only; otherwise 60-120 in steps of 10. */
-function coerceRpm(
-  raw: string,
-  pattern: CoffeePour["pattern"],
-  fallback: number,
-): number {
-  if (pattern === "center") return 0;
-  const n = whole(raw, fallback);
-  const stepped = Math.round(n / 10) * 10;
-  if (stepped < 60) return 60;
-  if (stepped > 120) return 120;
-  return stepped;
-}
-
-const DEFAULT_NON_CENTER_RPM = 90;
-
 /** True if swapping index with index+dir would place a center pour at index 0. */
 function moveWouldPutCenterFirst(
   pours: CoffeePour[],
@@ -161,6 +148,7 @@ export function CoffeeEditor({
   fieldErrors = {},
 }: CoffeeProps) {
   const { t } = useI18n();
+  const grinderRpm = coffeeGrinderRpm(value.pours);
   const set = <K extends keyof CoffeeRecipeContent>(
     key: K,
     v: CoffeeRecipeContent[K],
@@ -174,17 +162,8 @@ export function CoffeeEditor({
     const pours = value.pours.map((p, i) => {
       if (i !== index) return p;
       const next = { ...p, ...patch };
-      // Selecting center immediately forces rpm=0; leaving center restores a
-      // valid non-center RPM when needed. Do not silently rewrite RPM on
-      // unrelated patches while pattern is already center.
-      if (patch.pattern != null && patch.rpm === undefined) {
-        if (patch.pattern === "center") {
-          next.rpm = 0;
-        } else if (next.rpm === 0 || next.rpm < 60 || next.rpm > 120) {
-          next.rpm = DEFAULT_NON_CENTER_RPM;
-        } else {
-          next.rpm = coerceRpm(String(next.rpm), patch.pattern, DEFAULT_NON_CENTER_RPM);
-        }
+      if (patch.pattern != null) {
+        next.rpm = patch.pattern === "center" ? 0 : grinderRpm;
       }
       return next;
     });
@@ -215,7 +194,10 @@ export function CoffeeEditor({
     if (value.pours.length >= 5) return;
     onChange({
       ...value,
-      pours: [...value.pours, defaultCoffeePour(value.pours.length)],
+      pours: [
+        ...value.pours,
+        { ...defaultCoffeePour(value.pours.length), rpm: grinderRpm },
+      ],
     });
   };
 
@@ -336,6 +318,22 @@ export function CoffeeEditor({
             disabled={disabled}
             onChange={(e) => set("grind", whole(e.target.value, value.grind))}
           />
+        </Field>
+        <Field label={t("editor.rpm")} htmlFor="coffee-rpm" error={fieldErrors.rpm}>
+          <Select
+            id="coffee-rpm"
+            value={String(grinderRpm)}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange(applyCoffeeGrinderRpm(value, Number(e.target.value)))
+            }
+          >
+            {GRINDER_RPM_OPTIONS.map((rpmOpt) => (
+              <option key={rpmOpt} value={String(rpmOpt)}>
+                {rpmOpt} RPM
+              </option>
+            ))}
+          </Select>
         </Field>
         <Field label={t("editor.ratio")} htmlFor="coffee-ratio" error={fieldErrors.ratio}>
           <TextInput
@@ -535,9 +533,6 @@ function PourRowCoffee({
   onRemove: () => void;
 }) {
   const { t } = useI18n();
-  const isCenter = pour.pattern === "center";
-  const rpmMin = isCenter ? 0 : 60;
-  const rpmMax = isCenter ? 0 : 120;
 
   return (
     <div className="rounded-2xl border border-line bg-surface-2 p-3">
@@ -565,7 +560,7 @@ function PourRowCoffee({
           </IconButton>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         <Field label={t("editor.pourLabel")}>
           <TextInput
             value={pour.label ?? ""}
@@ -619,22 +614,6 @@ function PourRowCoffee({
             value={pour.pause_s}
             disabled={disabled}
             onChange={(e) => onChange({ pause_s: num(e.target.value, pour.pause_s) })}
-          />
-        </Field>
-        <Field
-          label={t("editor.rpm")}
-          hint={isCenter ? `0 (${t("pattern.center")})` : "60-120"}
-        >
-          <TextInput
-            type="number"
-            min={rpmMin}
-            max={rpmMax}
-            step={isCenter ? 1 : 10}
-            value={pour.rpm}
-            disabled={disabled || isCenter}
-            onChange={(e) =>
-              onChange({ rpm: coerceRpm(e.target.value, pour.pattern, pour.rpm) })
-            }
           />
         </Field>
         <Field label={t("editor.flow")}>

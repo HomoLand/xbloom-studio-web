@@ -111,6 +111,25 @@ class ArchiveRestoreBody(StrictRequestModel):
     expected_latest_revision_id: str = Field(min_length=1)
 
 
+class CloudSyncMetaBody(StrictRequestModel):
+    """Persist or clear xBloom account cloud-sync linkage on a host recipe."""
+
+    table_id: int | None = Field(default=None, ge=1)
+    region: Literal["china", "international"] | None = None
+    share_link: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_cloud_meta(self) -> CloudSyncMetaBody:
+        if self.table_id is not None and self.region is None:
+            raise ValueError("region is required when table_id is set")
+        if self.share_link is not None:
+            cleaned = self.share_link.strip()
+            self.share_link = cleaned or None
+            if self.share_link and not self.share_link.startswith(("https://", "http://")):
+                raise ValueError("share_link must be an http(s) URL")
+        return self
+
+
 class DesignProvenanceBody(StrictRequestModel):
     """Typed B7 design provenance. No image bytes, paths, secrets, or reasoning.
 
@@ -187,12 +206,17 @@ def _map_storage_error(exc: StorageError) -> None:
     _raise_http(400, "validation", msg)
 
 
-def _metadata_from_tags(tags: list[str] | None) -> dict[str, Any] | None:
-    """Tags are the only browser-supplied metadata."""
+def _metadata_from_tags(
+    tags: list[str] | None,
+    existing_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Merge browser-supplied tags into existing recipe metadata."""
 
     if tags is None:
         return None
-    return {"tags": list(tags)}
+    merged = dict(existing_metadata or {})
+    merged["tags"] = list(tags)
+    return merged
 
 
 def _design_style_hash(candidate: dict[str, Any]) -> str:
@@ -489,9 +513,14 @@ def list_revisions(recipe_id: str) -> dict[str, Any]:
 def create_revision(recipe_id: str, body: CreateRevisionBody) -> dict[str, Any]:
     """Create a new revision with mandatory expected-parent OCC (409 on stale)."""
 
-    metadata = _metadata_from_tags(body.tags)
     try:
         with state_store() as store:
+            metadata: dict[str, Any] | None = None
+            if body.tags is not None:
+                existing = store.get_recipe(recipe_id)
+                if existing is None:
+                    _raise_http(404, "not_found", f"unknown recipe_id {recipe_id!r}")
+                metadata = _metadata_from_tags(body.tags, existing.get("metadata"))
             result = store.create_recipe_revision(
                 recipe_id,
                 body.content,
@@ -506,6 +535,36 @@ def create_revision(recipe_id: str, body: CreateRevisionBody) -> dict[str, Any]:
         _map_storage_error(exc)
         raise  # pragma: no cover
     return result
+
+
+@router.post("/{recipe_id}/cloud-meta")
+def update_cloud_meta(recipe_id: str, body: CloudSyncMetaBody) -> dict[str, Any]:
+    """Update or clear xBloom cloud sync metadata without creating a revision."""
+
+    try:
+        with state_store() as store:
+            existing = store.get_recipe(recipe_id)
+            if existing is None:
+                _raise_http(404, "not_found", f"unknown recipe_id {recipe_id!r}")
+            if existing.get("archived_at"):
+                _raise_http(409, "conflict", f"recipe {recipe_id!r} is archived")
+            meta = dict(existing.get("metadata") or {})
+            if body.table_id is None:
+                meta.pop("cloud_sync", None)
+            else:
+                cloud_sync: dict[str, Any] = {
+                    "table_id": int(body.table_id),
+                    "region": body.region,
+                }
+                if body.share_link:
+                    cloud_sync["share_link"] = body.share_link
+                meta["cloud_sync"] = cloud_sync
+            updated = store.upsert_recipe(recipe_id=recipe_id, metadata=meta)
+            latest = store.get_latest_recipe_revision(recipe_id)
+    except StorageError as exc:
+        _map_storage_error(exc)
+        raise  # pragma: no cover
+    return {"recipe": {**updated, "latest_revision": latest}}
 
 
 @router.post("/{recipe_id}/archive")

@@ -771,3 +771,140 @@ def test_water_start_forwards_validated_args_and_rejects_invalid_inputs(
     )
     assert res_extra.status_code == 422
     assert secret not in res_extra.text
+
+
+def test_recipe_cloud_meta_persists_survives_revisions_and_validates(
+    client: TestClient,
+) -> None:
+    content = {
+        "name": "Cloud Meta Test",
+        "kind": "hot",
+        "dripper": "Omni",
+        "dose_g": 15,
+        "grind": 50,
+        "ratio": 16,
+        "water_ml": 240,
+        "pours": [
+            {
+                "label": "Bloom",
+                "ml": 45,
+                "temp_c": 92,
+                "pattern": "spiral",
+                "vibration": "none",
+                "pause_s": 30,
+                "rpm": 90,
+                "flow_ml_s": 3.0,
+            },
+            {
+                "label": "Pour 1",
+                "ml": 100,
+                "temp_c": 92,
+                "pattern": "spiral",
+                "vibration": "none",
+                "pause_s": 10,
+                "rpm": 90,
+                "flow_ml_s": 3.2,
+            },
+            {
+                "label": "Pour 2",
+                "ml": 95,
+                "temp_c": 92,
+                "pattern": "spiral",
+                "vibration": "none",
+                "pause_s": 5,
+                "rpm": 90,
+                "flow_ml_s": 3.2,
+            },
+        ],
+    }
+    created = client.post("/api/recipes", json={"content": content})
+    assert created.status_code == 200, created.text
+    recipe_id = created.json()["recipe"]["recipe_id"]
+    rev1_id = created.json()["revision"]["revision_id"]
+
+    # Missing region when table_id is set -> 422
+    bad_region = client.post(
+        f"/api/recipes/{recipe_id}/cloud-meta",
+        json={"table_id": 8848},
+    )
+    assert bad_region.status_code == 422
+
+    # Non-http(s) share link -> 422
+    bad_share = client.post(
+        f"/api/recipes/{recipe_id}/cloud-meta",
+        json={
+            "table_id": 8848,
+            "region": "china",
+            "share_link": "file:///tmp/evil",
+        },
+    )
+    assert bad_share.status_code == 422
+
+    share_url = "https://share-h5.xbloomcoffee.cn/?id=abc123"
+    saved_meta = client.post(
+        f"/api/recipes/{recipe_id}/cloud-meta",
+        json={
+            "table_id": 8848,
+            "region": "china",
+            "share_link": share_url,
+        },
+    )
+    assert saved_meta.status_code == 200, saved_meta.text
+    cloud_sync = saved_meta.json()["recipe"]["metadata"]["cloud_sync"]
+    assert cloud_sync == {
+        "table_id": 8848,
+        "region": "china",
+        "share_link": share_url,
+    }
+    assert saved_meta.json()["recipe"]["latest_revision"]["revision_id"] == rev1_id
+
+    listed = client.get("/api/recipes")
+    assert listed.status_code == 200
+    match = next(r for r in listed.json()["recipes"] if r["recipe_id"] == recipe_id)
+    assert match["metadata"]["cloud_sync"] == cloud_sync
+
+    fetched = client.get(f"/api/recipes/{recipe_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["recipe"]["metadata"]["cloud_sync"] == cloud_sync
+
+    # Creating a revision with tags must preserve cloud_sync.
+    rev2 = client.post(
+        f"/api/recipes/{recipe_id}/revisions",
+        json={
+            "content": {**content, "grind": 48},
+            "expected_parent_revision_id": rev1_id,
+            "tags": ["floral"],
+        },
+    )
+    assert rev2.status_code == 200, rev2.text
+    assert rev2.json()["recipe"]["metadata"]["cloud_sync"] == cloud_sync
+    assert rev2.json()["recipe"]["metadata"]["tags"] == ["floral"]
+    rev2_id = rev2.json()["revision"]["revision_id"]
+
+    # Clearing cloud_sync removes the key while preserving other metadata.
+    cleared = client.post(
+        f"/api/recipes/{recipe_id}/cloud-meta",
+        json={"table_id": None, "region": None, "share_link": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert "cloud_sync" not in (cleared.json()["recipe"]["metadata"] or {})
+    assert cleared.json()["recipe"]["metadata"]["tags"] == ["floral"]
+
+    # Unknown recipe -> 404.
+    missing = client.post(
+        "/api/recipes/rcp_does_not_exist/cloud-meta",
+        json={"table_id": 1, "region": "china"},
+    )
+    assert missing.status_code == 404
+
+    # Archived recipe -> 409.
+    archived = client.post(
+        f"/api/recipes/{recipe_id}/archive",
+        json={"expected_latest_revision_id": rev2_id},
+    )
+    assert archived.status_code == 200
+    archived_update = client.post(
+        f"/api/recipes/{recipe_id}/cloud-meta",
+        json={"table_id": 9999, "region": "china"},
+    )
+    assert archived_update.status_code == 409

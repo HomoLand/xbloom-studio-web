@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Coffee, Leaf, Snowflake } from "lucide-react";
 import type { RecipeContent } from "../api";
 import { useI18n } from "../i18n/I18nContext";
-import { isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
+import { coffeeGrinderRpm, isCoffeeContent, recipeDisplayName } from "../lib/recipeDomain";
 
 export function RecipeCard({ content, name, badge, subtitle, compact = false, children }: {
   content: RecipeContent;
@@ -38,7 +38,7 @@ export function RecipeCard({ content, name, badge, subtitle, compact = false, ch
         {badge}
       </div>
       <h3 className={`break-words font-semibold leading-snug text-ink ${compact ? "min-h-12 text-base" : "text-xl"}`}>{name || recipeDisplayName(content)}</h3>
-      <p className="mt-2 text-xs text-ink-faint">{coffee ? `${content.dripper || "—"}${content.ratio != null ? ` · 1:${content.ratio}` : ""}` : t("recipeCard.teaBasket")}</p>
+      <p className="mt-2 text-xs text-ink-faint">{coffee ? `${content.dripper || "—"}${content.ratio != null ? ` · 1:${content.ratio}` : ""}${Number(content.grind) > 0 ? ` · ${coffeeGrinderRpm(content.pours)} RPM` : ""}` : t("recipeCard.teaBasket")}</p>
       {subtitle ? <div className="mt-1 break-words text-xs text-ink-faint">{subtitle}</div> : null}
     </header>
     <div className="flex flex-1 flex-col gap-4 p-5">
@@ -60,7 +60,7 @@ export function RecipeCard({ content, name, badge, subtitle, compact = false, ch
             <span className="block font-medium tabular-nums">{pour.ml} ml</span><span className="mt-1 block text-ink-muted">{temperature(pour.temp_c)}</span>
           </li> : <li key={index} className="rounded-xl bg-surface-2 px-3 py-2.5 text-sm">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="text-xs text-ink-faint">{index + 1}.</span><span className="min-w-0 flex-1 break-words">{pour.label}</span><span className="tabular-nums">{pour.ml} ml · {temperature(pour.temp_c)} · {pour.pause_s}s</span></div>
-            <p className="mt-1 text-xs text-ink-muted">{labelPattern(pour.pattern)} · {pour.flow_ml_s} ml/s{"rpm" in pour ? ` · ${pour.rpm} rpm` : ""}{"vibration" in pour && pour.vibration && pour.vibration !== "none" ? ` · ${t("recipeCard.vibration")} ${labelVibration(pour.vibration)}` : ""}</p>
+            <p className="mt-1 text-xs text-ink-muted">{labelPattern(pour.pattern)} · {pour.flow_ml_s} ml/s{"vibration" in pour && pour.vibration && pour.vibration !== "none" ? ` · ${t("recipeCard.vibration")} ${labelVibration(pour.vibration)}` : ""}</p>
           </li>)}
         </ol>
       </div>

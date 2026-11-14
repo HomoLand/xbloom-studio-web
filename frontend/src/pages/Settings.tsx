@@ -42,7 +42,10 @@ import {
   writeAiConfig,
   type AiConfig,
 } from "../lib/aiConfig";
-import { importCloudSyncTargets } from "../lib/cloudCatalog";
+import {
+  formatTwoWaySyncSummary,
+  syncCloudRecipesTwoWay,
+} from "../lib/cloudRecipeSync";
 import { importCloudBrewRecords } from "../lib/localHistory";
 import {
   formatEpochSeconds,
@@ -53,7 +56,6 @@ import {
 import {
   cloudErrorMessage,
   fetchCloudBrewRecords,
-  syncAccountCatalog,
 } from "../lib/xbloomCloud";
 import { useMachine } from "../machine/MachineContext";
 import type { MachineDriver } from "../machine/driver";
@@ -443,28 +445,12 @@ export default function Settings() {
               disabled={accBusy != null}
               onClick={() =>
                 void runAccountAction("recipes", async (creds) => {
-                  const result = await syncAccountCatalog({
-                    email: creds.email,
-                    password: creds.password,
-                    region: creds.region,
-                    languageType: creds.languageType,
+                  const stats = await syncCloudRecipesTwoWay({
+                    creds,
+                    includeHistory: false,
+                    staticMode: mode === "static",
                   });
-                  const imported = importCloudSyncTargets(
-                    result.targets,
-                    result.region,
-                  );
-                  const total = imported.stats.reduce(
-                    (s, x) => s + x.imported,
-                    0,
-                  );
-                  const candidates = imported.stats.reduce(
-                    (s, x) => s + x.candidates,
-                    0,
-                  );
-                  return t("cloud.syncDone")
-                    .replace("{imported}", String(total))
-                    .replace("{candidates}", String(candidates))
-                    .replace("{region}", result.region);
+                  return formatTwoWaySyncSummary(stats, t);
                 })
               }
             >

@@ -1,16 +1,79 @@
 import type { RecipeContent, RecipeRecord } from "../api.ts";
+import {
+  isOwnedOnCloud,
+  resolveOwnedTableId,
+  type LocalRecipeEntry,
+} from "./localRecipes.ts";
 import { isCoffeeContent } from "./recipeDomain.ts";
 
 /** A cloud row has different IDs in the host catalog and old browser caches. */
 function cloudIdentity(recipe: RecipeRecord): string | null {
   const direct = /^cloud:(china|international):(.+)$/.exec(recipe.recipe_id);
   if (direct) return `${direct[1]}:${direct[2]}`;
+  const cs = recipe.metadata?.cloud_sync;
+  if (
+    cs &&
+    cs.table_id != null &&
+    Number(cs.table_id) > 0 &&
+    (cs.region === "china" || cs.region === "international")
+  ) {
+    return `${cs.region}:${Number(cs.table_id)}`;
+  }
   const envelope = recipe.metadata?.catalog_envelope as {
     table_id?: number;
     sources?: Array<{ region?: string }>;
   } | undefined;
   const region = envelope?.sources?.find(source => source.region)?.region;
   return envelope?.table_id != null && region ? `${region}:${envelope.table_id}` : null;
+}
+
+export type RecipeCloudState = {
+  ownedTableId: number | null;
+  region: "china" | "international" | null;
+  isOwned: boolean;
+  shareLink: string | null;
+  shareAuthor: string | null;
+};
+
+export function getRecipeCloudState(
+  recipe: RecipeRecord | null | undefined,
+  localEntry?: LocalRecipeEntry | null,
+): RecipeCloudState {
+  if (recipe?.source === "official" || localEntry?.source === "official") {
+    return {
+      ownedTableId: null,
+      region: null,
+      isOwned: false,
+      shareLink: localEntry?.share_link ?? null,
+      shareAuthor: localEntry?.share_author ?? null,
+    };
+  }
+  const cs = recipe?.metadata?.cloud_sync;
+  if (
+    cs &&
+    cs.table_id != null &&
+    Number(cs.table_id) > 0 &&
+    (cs.region === "china" || cs.region === "international")
+  ) {
+    return {
+      ownedTableId: Number(cs.table_id),
+      region: cs.region,
+      isOwned: true,
+      shareLink: cs.share_link ?? localEntry?.share_link ?? null,
+      shareAuthor: localEntry?.share_author ?? null,
+    };
+  }
+  const localRegion =
+    localEntry?.region === "china" || localEntry?.region === "international"
+      ? localEntry.region
+      : null;
+  return {
+    ownedTableId: resolveOwnedTableId(localEntry),
+    region: localRegion,
+    isOwned: isOwnedOnCloud(localEntry),
+    shareLink: localEntry?.share_link ?? null,
+    shareAuthor: localEntry?.share_author ?? null,
+  };
 }
 
 function complete(content: RecipeContent | undefined): content is RecipeContent {

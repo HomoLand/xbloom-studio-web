@@ -41,24 +41,24 @@ import {
 } from "../components/ui";
 import { useI18n } from "../i18n/I18nContext";
 import { getAccountCredentials } from "../lib/accountPrefs";
-import { mergeRecipeLibrary } from "../lib/recipeLibrary";
 import {
-  importCloudSyncTargets,
-  importShareLink,
-} from "../lib/cloudCatalog";
+  formatTwoWaySyncSummary,
+  syncCloudRecipesTwoWay,
+} from "../lib/cloudRecipeSync";
+import { getRecipeCloudState, mergeRecipeLibrary } from "../lib/recipeLibrary";
+import { importShareLink } from "../lib/cloudCatalog";
 import {
   deleteUserRecipe,
   getLocalRecipe,
-  isOwnedOnCloud,
   listAllLocalRecipes,
   promoteLocalToCloudOwned,
-  resolveOwnedTableId,
   saveUserRecipe,
   toLatestRevision,
   toRecipeRecord,
   type LocalRecipeEntry,
 } from "../lib/localRecipes";
 import {
+  applyCoffeeGrinderRpm,
   isCoffeeContent,
   isTeaContent,
   recipeDisplayName,
@@ -69,16 +69,14 @@ import {
   exportSingleRecipeJson,
   importRecipesFromJson,
 } from "../lib/recipeIo";
-import { importCloudBrewRecords } from "../lib/localHistory";
 import {
   CLOUD_DELETE_CONFIRM,
   CLOUD_WRITE_CONFIRM,
   CloudError,
+  cloudErrorMessage,
   createCloudShareLink,
   deleteCloudRecipe,
-  fetchCloudBrewRecords,
   pushCloudRecipe,
-  syncAccountCatalog,
   updateCloudRecipe,
 } from "../lib/xbloomCloud";
 import { useMachine } from "../machine/MachineContext";
@@ -103,6 +101,7 @@ export default function Recipes() {
   const [shareInput, setShareInput] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const hostRecipes = useRef(new Map<string, RecipeRecord>());
+  const activeSelectedRef = useRef<string | null>(null);
 
   const loadList = useCallback(async () => {
     setError(null);
@@ -128,6 +127,7 @@ export default function Recipes() {
 
   const openDetail = useCallback(
     (recipeId: string, opts?: { quietMissing?: boolean }) => {
+      activeSelectedRef.current = recipeId;
       setSelectedId(recipeId);
       const remote = hostRecipes.current.get(recipeId);
       if (remote) {
@@ -139,6 +139,7 @@ export default function Recipes() {
       }
       const entry = getLocalRecipe(recipeId);
       if (!entry) {
+        activeSelectedRef.current = null;
         setSelectedId(null);
         setDetail(null);
         setLatest(null);
@@ -168,6 +169,7 @@ export default function Recipes() {
 
   const content: RecipeContent | null = latest?.content ?? null;
   const closeDetail = () => {
+    activeSelectedRef.current = null;
     setSelectedId(null);
     setDetail(null);
     setLatest(null);
@@ -214,17 +216,24 @@ export default function Recipes() {
     return creds;
   };
 
+  const detailCloud = getRecipeCloudState(detail, localEntry);
+
   const runCloud = async (label: string, fn: () => Promise<void>) => {
     setError(null);
     setInfo(null);
     setCloudBusy(label);
     try {
       await fn();
-      loadList();
-      // Only re-open detail if the recipe still exists (e.g. not after delete).
-      if (selectedId && getLocalRecipe(selectedId)) {
-        openDetail(selectedId, { quietMissing: true });
-      } else if (selectedId && !getLocalRecipe(selectedId)) {
+      await loadList();
+      const activeId = activeSelectedRef.current;
+      // Keep the dialog open if the recipe still exists in host SQLite or localStorage.
+      if (
+        activeId &&
+        (hostRecipes.current.has(activeId) || getLocalRecipe(activeId))
+      ) {
+        openDetail(activeId, { quietMissing: true });
+      } else if (activeId) {
+        activeSelectedRef.current = null;
         setSelectedId(null);
         setDetail(null);
         setLatest(null);
@@ -236,7 +245,7 @@ export default function Recipes() {
       } else {
         setError(
           e instanceof CloudError
-            ? e.message
+            ? cloudErrorMessage(e, t)
             : e instanceof Error
               ? e.message
               : String(e),
@@ -250,67 +259,46 @@ export default function Recipes() {
   const onSync = () =>
     void runCloud("sync", async () => {
       const creds = await requireCreds();
-      const result = await syncAccountCatalog({
-        email: creds.email,
-        password: creds.password,
-        region: creds.region,
-        languageType: creds.languageType,
+      const stats = await syncCloudRecipesTwoWay({
+        creds,
+        includeHistory: true,
+        staticMode: isStaticDeploy(),
       });
-      const imported = importCloudSyncTargets(result.targets, result.region);
-      const total = imported.stats.reduce((s, x) => s + x.imported, 0);
-      const candidates = imported.stats.reduce((s, x) => s + x.candidates, 0);
-      let historyNote = "";
-      try {
-        const hist = await fetchCloudBrewRecords({
-          email: creds.email,
-          password: creds.password,
-          region: creds.region,
-          languageType: creds.languageType,
-        });
-        const merged = importCloudBrewRecords(hist.records, hist.region);
-        historyNote = t("cloud.syncHistoryNote")
-          .replace("{imported}", String(merged.imported))
-          .replace("{updated}", String(merged.updated));
-      } catch {
-        historyNote = t("cloud.syncHistoryFailed");
-      }
-      setInfo(
-        t("cloud.syncDone")
-          .replace("{imported}", String(total))
-          .replace("{candidates}", String(candidates))
-          .replace("{region}", result.region) +
-          (historyNote ? ` · ${historyNote}` : ""),
-      );
+      setInfo(formatTwoWaySyncSummary(stats, t));
     });
 
   const onPush = () =>
     void runCloud("push", async () => {
       const creds = await requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
+      const normalizedContent = isCoffeeContent(content)
+        ? applyCoffeeGrinderRpm(content)
+        : content;
       const result = await pushCloudRecipe({
         email: creds.email,
         password: creds.password,
         region: creds.region,
-        content,
+        content: normalizedContent,
         confirmWrite: CLOUD_WRITE_CONFIRM,
+        languageType: creds.languageType,
       });
-      if (result.status === "already-present") {
-        setInfo(t("cloud.alreadyPresentSimple"));
-        if (localEntry && result.remote_table_id) {
-          const promoted = promoteLocalToCloudOwned(localEntry.recipe_id, {
-            content,
-            tableId: result.remote_table_id,
+      const baseMsg =
+        result.status === "already-present"
+          ? t("cloud.alreadyPresentSimple")
+          : t("cloud.createdSimple");
+      setInfo(baseMsg);
+
+      if (result.remote_table_id != null && result.remote_table_id > 0) {
+        if (detail && hostRecipes.current.has(detail.recipe_id)) {
+          await api.setRecipeCloudMeta(detail.recipe_id, {
+            table_id: result.remote_table_id,
             region: creds.region,
-            shareLink: localEntry.share_link,
-            shareAuthor: localEntry.share_author,
+            share_link: detailCloud.shareLink,
           });
-          openDetail(promoted.recipe_id);
-        }
-      } else {
-        setInfo(t("cloud.createdSimple"));
-        if (localEntry && result.remote_table_id) {
+          deleteUserRecipe(`cloud:${creds.region}:${result.remote_table_id}`);
+        } else if (localEntry) {
           const promoted = promoteLocalToCloudOwned(localEntry.recipe_id, {
-            content,
+            content: normalizedContent,
             tableId: result.remote_table_id,
             region: creds.region,
             shareLink: localEntry.share_link,
@@ -324,8 +312,8 @@ export default function Recipes() {
   const onDeleteCloud = () =>
     void runCloud("delete", async () => {
       const creds = await requireCreds();
-      const tableId = resolveOwnedTableId(localEntry);
-      if (tableId == null || !isOwnedOnCloud(localEntry)) {
+      const tableId = detailCloud.ownedTableId;
+      if (tableId == null || !detailCloud.isOwned) {
         throw new CloudError(t("cloud.needTableId"));
       }
       if (
@@ -334,23 +322,57 @@ export default function Recipes() {
       ) {
         return;
       }
-      await deleteCloudRecipe({
-        email: creds.email,
-        password: creds.password,
-        region: creds.region,
-        tableId,
-        confirmDelete: CLOUD_DELETE_CONFIRM,
-        expectedName: localEntry?.name,
-      });
+      const isHostDetail = Boolean(
+        detail && hostRecipes.current.has(detail.recipe_id),
+      );
+      const cloudRegion = detailCloud.region ?? creds.region;
+      try {
+        await deleteCloudRecipe({
+          email: creds.email,
+          password: creds.password,
+          region: cloudRegion,
+          tableId,
+          confirmDelete: CLOUD_DELETE_CONFIRM,
+          expectedName: isHostDetail ? undefined : localEntry?.name,
+          languageType: creds.languageType,
+        });
+      } catch (e) {
+        if (
+          e instanceof CloudError &&
+          e.code === "not_on_account" &&
+          isHostDetail &&
+          detail
+        ) {
+          await api.setRecipeCloudMeta(detail.recipe_id, {
+            table_id: null,
+            region: null,
+            share_link: null,
+          });
+          deleteUserRecipe(`cloud:${cloudRegion}:${tableId}`);
+          setInfo(t("cloud.deletedUnlinkedHost"));
+          return;
+        }
+        throw e;
+      }
+      if (isHostDetail && detail) {
+        await api.setRecipeCloudMeta(detail.recipe_id, {
+          table_id: null,
+          region: null,
+          share_link: null,
+        });
+        deleteUserRecipe(`cloud:${cloudRegion}:${tableId}`);
+        setInfo(t("cloud.deletedUnlinkedHost"));
+        return;
+      }
       setInfo(t("cloud.deleted"));
       // Remove local row after successful cloud delete of owned recipe.
       if (localEntry) {
         deleteUserRecipe(localEntry.recipe_id);
+        activeSelectedRef.current = null;
         setSelectedId(null);
         setDetail(null);
         setLatest(null);
         setLocalEntry(null);
-        loadList();
       }
     });
 
@@ -364,28 +386,35 @@ export default function Recipes() {
             ? ` · ${t("share.fromAuthor").replace("{author}", entry.share_author)}`
             : ""),
       );
-      loadList();
       openDetail(entry.recipe_id);
     });
 
   const onCreateShare = () =>
     void runCloud("share-create", async () => {
       const creds = await requireCreds();
-      const tableId = resolveOwnedTableId(localEntry);
+      const tableId = detailCloud.ownedTableId;
       if (tableId == null) throw new CloudError(t("share.needTableId"));
+      const region = detailCloud.region ?? creds.region;
       const result = await createCloudShareLink({
         email: creds.email,
         password: creds.password,
-        region: creds.region,
+        region,
         tableId,
-        existingShareLink: localEntry?.share_link,
+        existingShareLink: detailCloud.shareLink,
+        languageType: creds.languageType,
       });
-      if (localEntry) {
+      if (detail && hostRecipes.current.has(detail.recipe_id) && detailCloud.isOwned) {
+        await api.setRecipeCloudMeta(detail.recipe_id, {
+          table_id: tableId,
+          region,
+          share_link: result.share_link,
+        });
+      } else if (localEntry) {
         saveUserRecipe(localEntry.content, {
           recipeId: localEntry.recipe_id,
           source: localEntry.source,
           tableId,
-          region: localEntry.region ?? creds.region,
+          region,
           origin: localEntry.origin,
           shareLink: result.share_link,
           shareAuthor: localEntry.share_author,
@@ -403,7 +432,7 @@ export default function Recipes() {
     });
 
   const onCopyShare = async () => {
-    const link = localEntry?.share_link;
+    const link = detailCloud.shareLink;
     if (!link) {
       setError(t("share.noLinkYet"));
       return;
@@ -420,8 +449,8 @@ export default function Recipes() {
     void runCloud("update", async () => {
       const creds = await requireCreds();
       if (!content) throw new CloudError(t("cloud.noRecipe"));
-      const tableId = resolveOwnedTableId(localEntry);
-      if (tableId == null || !isOwnedOnCloud(localEntry)) {
+      const tableId = detailCloud.ownedTableId;
+      if (tableId == null || !detailCloud.isOwned) {
         throw new CloudError(t("cloud.needTableId"));
       }
       if (
@@ -430,23 +459,51 @@ export default function Recipes() {
       ) {
         return;
       }
+      const isHostDetail = Boolean(
+        detail && hostRecipes.current.has(detail.recipe_id),
+      );
+      const cloudRegion = detailCloud.region ?? creds.region;
+      const normalizedContent = isCoffeeContent(content)
+        ? applyCoffeeGrinderRpm(content)
+        : content;
       const result = await updateCloudRecipe({
         email: creds.email,
         password: creds.password,
-        region: creds.region,
+        region: cloudRegion,
         tableId,
-        content,
-        expectedName: localEntry?.name,
+        content: normalizedContent,
+        expectedName: isHostDetail ? undefined : localEntry?.name,
+        languageType: creds.languageType,
       });
       setInfo(t("cloud.updated"));
-      if (localEntry) {
-        saveUserRecipe(content, {
-          recipeId: localEntry.recipe_id,
-          source: localEntry.source === "official" ? "user" : localEntry.source,
-          tableId: result.remote_table_id,
-          region: creds.region,
-          origin: "created",
+      if (isHostDetail && detail && result.remote_table_id != null && result.remote_table_id > 0) {
+        await api.setRecipeCloudMeta(detail.recipe_id, {
+          table_id: result.remote_table_id,
+          region: cloudRegion,
+          share_link: null,
         });
+        deleteUserRecipe(`cloud:${cloudRegion}:${tableId}`);
+        deleteUserRecipe(`cloud:${cloudRegion}:${result.remote_table_id}`);
+      } else if (localEntry) {
+        if (result.remote_table_id != null && result.remote_table_id > 0) {
+          const promoted = promoteLocalToCloudOwned(localEntry.recipe_id, {
+            content: normalizedContent,
+            tableId: result.remote_table_id,
+            region: cloudRegion,
+            shareLink: null,
+            shareAuthor: localEntry.share_author,
+          });
+          openDetail(promoted.recipe_id);
+        } else {
+          saveUserRecipe(normalizedContent, {
+            recipeId: localEntry.recipe_id,
+            source: localEntry.source === "official" ? "user" : localEntry.source,
+            tableId: result.remote_table_id,
+            region: cloudRegion,
+            origin: "created",
+            shareLink: null,
+          });
+        }
       }
     });
 
@@ -461,11 +518,12 @@ export default function Recipes() {
     deleteUserRecipe(localEntry.recipe_id);
     setError(null);
     setInfo(t("recipes.deletedLocal"));
+    activeSelectedRef.current = null;
     setSelectedId(null);
     setDetail(null);
     setLatest(null);
     setLocalEntry(null);
-    loadList();
+    void loadList();
   };
 
   const onArchiveHost = async () => {
@@ -475,6 +533,7 @@ export default function Recipes() {
       // Remove the former browser mirror, if this recipe predates hosted saves.
       deleteUserRecipe(detail.recipe_id);
       if (searchParams.get("selected") === detail.recipe_id) setSearchParams({}, { replace: true });
+      activeSelectedRef.current = null;
       setSelectedId(null); setDetail(null); setLatest(null); setLocalEntry(null);
       await loadList();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -496,6 +555,41 @@ export default function Recipes() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  const renderBadges = (r: RecipeRecord, local?: LocalRecipeEntry | null) => {
+    const source =
+      r.source === "web-design" ||
+      r.latest_revision?.provenance?.source === "design"
+        ? "design"
+        : String(r.source ?? "");
+    const cloudState = getRecipeCloudState(r, local);
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <StatusPill
+          tone={
+            source === "official"
+              ? "blue"
+              : source === "shared"
+                ? "amber"
+                : source === "design"
+                  ? "green"
+                  : "neutral"
+          }
+        >
+          {source === "official"
+            ? t("recipes.official")
+            : source === "shared"
+              ? t("recipes.shared")
+              : source === "design"
+                ? t("recipes.design")
+                : t("recipes.user")}
+        </StatusPill>
+        {source !== "official" && cloudState.isOwned ? (
+          <StatusPill tone="blue">{t("recipes.syncedApp")}</StatusPill>
+        ) : null}
+      </div>
+    );
   };
 
   return (
@@ -643,36 +737,16 @@ export default function Recipes() {
           ) : (
             <ul className="grid items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="recipe-grid">
               {filteredRecipes.map((r) => {
-                const source = r.source === "web-design" || r.latest_revision?.provenance?.source === "design" ? "design" : String(r.source ?? "");
+                const entry = getLocalRecipe(r.recipe_id);
                 const c = (r.latest_revision?.content ??
-                  getLocalRecipe(r.recipe_id)?.content) as RecipeContent | null;
+                  entry?.content) as RecipeContent | null;
                 return (
                   <li key={r.recipe_id} className="min-w-0">
                     {c ? <RecipeCard
                       name={r.name}
                       content={c}
                       compact
-                      badge={
-                        <StatusPill
-                          tone={
-                            source === "official"
-                              ? "blue"
-                              : source === "shared"
-                                ? "amber"
-                                : source === "design"
-                                  ? "green"
-                                  : "neutral"
-                          }
-                        >
-                          {source === "official"
-                            ? t("recipes.official")
-                            : source === "shared"
-                              ? t("recipes.shared")
-                              : source === "design"
-                                ? t("recipes.design")
-                                : t("recipes.user")}
-                        </StatusPill>
-                      }
+                      badge={renderBadges(r, entry)}
                     >
                       <div className="flex flex-wrap gap-2">
                         <Button variant="primary" size="sm" disabled={!r.latest_revision} onClick={() => setBrewTarget({ recipeRevisionId: r.latest_revision!.revision_id, content: c, recipeName: r.name })}><Play size={14} aria-hidden />{t("design.use")}</Button>
@@ -692,26 +766,26 @@ export default function Recipes() {
               {selectedId ? t("common.loading") : t("recipes.selectHint")}
             </p>
           ) : (
-            <RecipeCard content={content} name={detail.name}>
-              {localEntry?.share_author || localEntry?.share_link ? (
+            <RecipeCard content={content} name={detail.name} badge={renderBadges(detail, localEntry)}>
+              {detailCloud.shareAuthor || detailCloud.shareLink ? (
                 <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-ink-muted">
-                  {localEntry.share_author ? (
+                  {detailCloud.shareAuthor ? (
                     <div>
                       {t("share.fromAuthor").replace(
                         "{author}",
-                        localEntry.share_author,
+                        detailCloud.shareAuthor,
                       )}
                     </div>
                   ) : null}
-                  {localEntry.share_link ? (
+                  {detailCloud.shareLink ? (
                     <div className="mt-0.5 break-all">
                       <a
-                        href={localEntry.share_link}
+                        href={detailCloud.shareLink}
                         target="_blank"
                         rel="noreferrer"
                         className="text-brand hover:underline"
                       >
-                        {localEntry.share_link}
+                        {detailCloud.shareLink}
                       </a>
                     </div>
                   ) : null}
@@ -741,7 +815,7 @@ export default function Recipes() {
                   <Pencil className="h-3.5 w-3.5" aria-hidden />
                   {t("recipes.edit")}
                 </Link>
-                {localEntry?.share_link ? (
+                {detailCloud.shareLink ? (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -750,7 +824,7 @@ export default function Recipes() {
                     <Share2 className="h-3.5 w-3.5" aria-hidden />
                     {t("recipes.copyShareLink")}
                   </Button>
-                ) : resolveOwnedTableId(localEntry) != null ? (
+                ) : detailCloud.ownedTableId != null ? (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -788,8 +862,8 @@ export default function Recipes() {
                   </Button>
                   {detailMenuOpen ? (
                     <div className="absolute bottom-full right-0 z-20 mb-2 min-w-48 max-w-[calc(100vw-3rem)] rounded-2xl border border-line bg-surface p-1.5 shadow-xl">
-                      {(localEntry?.share_link ||
-                        resolveOwnedTableId(localEntry) != null) &&
+                      {(detailCloud.shareLink ||
+                        detailCloud.ownedTableId != null) &&
                       content ? (
                         <button
                           type="button"
@@ -804,8 +878,8 @@ export default function Recipes() {
                           {t("recipes.syncToCloud")}
                         </button>
                       ) : null}
-                      {localEntry?.share_link &&
-                      resolveOwnedTableId(localEntry) != null ? (
+                      {detailCloud.shareLink &&
+                      detailCloud.ownedTableId != null ? (
                         <button
                           type="button"
                           disabled={cloudBusy != null}
@@ -819,7 +893,7 @@ export default function Recipes() {
                           {t("share.create")}
                         </button>
                       ) : null}
-                      {isOwnedOnCloud(localEntry) ? (
+                      {detailCloud.isOwned ? (
                         <button
                           type="button"
                           disabled={cloudBusy != null}
@@ -873,7 +947,7 @@ export default function Recipes() {
                           {t("recipes.deleteLocal")}
                         </button>
                       ) : null}
-                      {isOwnedOnCloud(localEntry) ? (
+                      {detailCloud.isOwned ? (
                         <button
                           type="button"
                           disabled={cloudBusy != null}

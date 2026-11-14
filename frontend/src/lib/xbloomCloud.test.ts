@@ -8,9 +8,12 @@ import {
   CloudError,
   cloudErrorMessage,
   buildCloudCoffeeForm,
+  canUploadRecipeToCloud,
   collectRecipeRecords,
+  resolveCloudCoffeeRpm,
   APP_RSA_PUBLIC_KEY_B64,
 } from "./xbloomCloud.ts";
+import { defaultTeaRecipe } from "./recipeDomain.ts";
 
 describe("cloud login error display", () => {
   const t = (key: "cloud.networkError" | "cloud.sessionExpired") => key;
@@ -110,5 +113,80 @@ describe("collectRecipeRecords", () => {
     const recs = collectRecipeRecords(payload);
     assert.equal(recs.length, 1);
     assert.equal(recs[0]?.theName, "A");
+  });
+});
+
+describe("resolveCloudCoffeeRpm & canUploadRecipeToCloud", () => {
+  const dirtyLegacyRecipe = {
+    name: "Legacy Dirty RPM Omni",
+    kind: "hot" as const,
+    dripper: "Omni",
+    dose_g: 15,
+    grind: 50,
+    ratio: 16,
+    water_ml: 240,
+    pours: [
+      {
+        label: "Bloom",
+        ml: 45,
+        temp_c: 92,
+        pattern: "center" as const,
+        vibration: "after" as const,
+        pause_s: 30,
+        rpm: 0,
+        flow_ml_s: 3.0,
+      },
+      {
+        label: "Pour 1",
+        ml: 95,
+        temp_c: 92,
+        pattern: "spiral" as const,
+        vibration: "none" as const,
+        pause_s: 10,
+        rpm: 110,
+        flow_ml_s: 3.2,
+      },
+      {
+        label: "Pour 2",
+        ml: 100,
+        temp_c: 91,
+        pattern: "circular" as const,
+        vibration: "none" as const,
+        pause_s: 0,
+        rpm: 90,
+        flow_ml_s: 3.0,
+      },
+    ],
+  };
+
+  it("picks global grinder RPM cleanly and silently normalizes legacy dirty pours", () => {
+    assert.equal(
+      resolveCloudCoffeeRpm([
+        { ...dirtyLegacyRecipe.pours[0] },
+        { ...dirtyLegacyRecipe.pours[1], rpm: 90 },
+      ]),
+      90,
+    );
+    assert.equal(
+      resolveCloudCoffeeRpm(
+        dirtyLegacyRecipe.pours.map((p) => ({ ...p, rpm: 0 })),
+      ),
+      120,
+    );
+    assert.equal(resolveCloudCoffeeRpm(dirtyLegacyRecipe.pours), 110);
+
+    const form = buildCloudCoffeeForm(dirtyLegacyRecipe);
+    assert.equal(form.rpm, 110);
+  });
+
+  it("allows Omni and tea recipes while rejecting xPod recipes", () => {
+    assert.deepEqual(canUploadRecipeToCloud(dirtyLegacyRecipe), { ok: true });
+    assert.deepEqual(canUploadRecipeToCloud(defaultTeaRecipe()), { ok: true });
+
+    const xpodCheck = canUploadRecipeToCloud({
+      ...dirtyLegacyRecipe,
+      dripper: "xPod",
+    });
+    assert.equal(xpodCheck.ok, false);
   });
 });

@@ -13,7 +13,7 @@
  * as network failures. Desktop/native Python path is unaffected.
  */
 
-import type { CoffeeRecipeContent, RecipeContent } from "../api.ts";
+import type { CoffeePour, CoffeeRecipeContent, RecipeContent } from "../api.ts";
 import { api } from "../api.ts";
 import { isStaticDeploy } from "./deploy.ts";
 import { isCoffeeContent, isTeaContent } from "./recipeDomain.ts";
@@ -667,6 +667,41 @@ function appPourRecord(
   };
 }
 
+export function resolveCloudCoffeeRpm(pours: CoffeePour[]): number {
+  const found =
+    pours.find((p) => p.pattern !== "center" && Number(p.rpm) > 0) ??
+    pours.find((p) => Number(p.rpm) > 0);
+  if (!found) return 120;
+  return Math.min(120, Math.max(60, Math.round(Number(found.rpm) / 10) * 10));
+}
+
+export function canUploadRecipeToCloud(
+  content: RecipeContent,
+): { ok: true } | { ok: false; reason: string } {
+  const name = String((content as { name?: string }).name || "").trim();
+  if (!name) return { ok: false, reason: "cloud recipe name must not be empty" };
+  if (isTeaContent(content)) {
+    if (!content.pours?.length) {
+      return { ok: false, reason: "recipe has no pours" };
+    }
+    return { ok: true };
+  }
+  if (!isCoffeeContent(content)) {
+    return { ok: false, reason: "unsupported recipe kind for cloud upload" };
+  }
+  const dripper = String(content.dripper || "Omni").toLowerCase();
+  if (!dripper.includes("omni") && !dripper.includes("xdripper")) {
+    return {
+      ok: false,
+      reason: "only Omni/xDripper loose-bean recipes can be added to the account",
+    };
+  }
+  if (!content.pours?.length) {
+    return { ok: false, reason: "recipe has no pours" };
+  }
+  return { ok: true };
+}
+
 export function buildCloudCoffeeForm(
   recipe: CoffeeRecipeContent,
 ): Record<string, unknown> {
@@ -680,15 +715,7 @@ export function buildCloudCoffeeForm(
   }
   const pours = recipe.pours || [];
   if (!pours.length) throw new CloudError("recipe has no pours");
-  const rpmValues = new Set(
-    pours.map((p) => Math.trunc(Number(p.rpm) || 0)).filter((r) => r > 0),
-  );
-  if (rpmValues.size > 1) {
-    throw new CloudError(
-      `account schema has one global RPM; local pours use ${[...rpmValues].sort().join(",")}`,
-    );
-  }
-  const rpm = rpmValues.values().next().value ?? 120;
+  const rpm = resolveCloudCoffeeRpm(pours);
   const appPours = pours.map((p, i) =>
     appPourRecord(i + 1, {
       ...p,

@@ -43,7 +43,16 @@ export default function RecipeEdit() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const recipeId = params.get("id");
-  const hosted = params.get("host") === "1" && !isStaticDeploy();
+  const existingLocal = recipeId ? getLocalRecipe(recipeId) : null;
+  const hosted =
+    !isStaticDeploy() &&
+    Boolean(recipeId) &&
+    (params.get("host") === "1" || existingLocal == null);
+  const saveToHostSqlite =
+    !isStaticDeploy() &&
+    (!recipeId ||
+      existingLocal?.source === "official" ||
+      recipeId.startsWith("official:"));
   const [hostRevision, setHostRevision] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<"coffee" | "tea">("coffee");
@@ -108,9 +117,29 @@ export default function RecipeEdit() {
       finally { setSaving(false); }
       return;
     }
+    if (saveToHostSqlite) {
+      setSaving(true);
+      try {
+        const created = await api.createRecipe({ content: check.content });
+        setSaved(true);
+        navigate(
+          `/recipes?selected=${encodeURIComponent(created.recipe.recipe_id)}`,
+          { replace: true },
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    const deriveFromOfficial =
+      !recipeId ||
+      recipeId.startsWith("official:") ||
+      existingLocal?.source === "official";
     const entry = saveUserRecipe(check.content, {
-      recipeId: recipeId && !recipeId.startsWith("official:") ? recipeId : undefined,
-      source: "user",
+      recipeId: deriveFromOfficial ? undefined : recipeId,
+      ...(deriveFromOfficial ? { source: "user" as const } : {}),
     });
     setSaved(true);
     navigate(`/recipes?selected=${encodeURIComponent(entry.recipe_id)}`, {

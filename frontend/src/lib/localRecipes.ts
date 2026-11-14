@@ -7,12 +7,18 @@
  */
 
 import type {
+  CloudSyncMeta,
   CoffeeRecipeContent,
   RecipeContent,
   RecipeRecord,
   RecipeRevision,
 } from "../api.ts";
-import { defaultCoffeeRecipe, isCoffeeContent, recipeDisplayName } from "./recipeDomain.ts";
+import {
+  applyCoffeeGrinderRpm,
+  defaultCoffeeRecipe,
+  isCoffeeContent,
+  recipeDisplayName,
+} from "./recipeDomain.ts";
 
 const USER_KEY = "xbloom.userRecipes.v1";
 
@@ -413,6 +419,19 @@ export function findLocalRecipeForRebrew(opts: {
 
 export function toRecipeRecord(entry: LocalRecipeEntry): RecipeRecord {
   const rev = toLatestRevision(entry);
+  const ownedTid = isOwnedOnCloud(entry) ? resolveOwnedTableId(entry) : null;
+  const region: "china" | "international" | null =
+    entry.region === "china" || entry.region === "international"
+      ? entry.region
+      : null;
+  const cloudSync: CloudSyncMeta | undefined =
+    ownedTid != null && region
+      ? {
+          table_id: ownedTid,
+          region,
+          ...(entry.share_link ? { share_link: entry.share_link } : {}),
+        }
+      : undefined;
   return {
     recipe_id: entry.recipe_id,
     name: entry.name,
@@ -420,6 +439,7 @@ export function toRecipeRecord(entry: LocalRecipeEntry): RecipeRecord {
     source: entry.source,
     created_at: entry.created_at,
     updated_at: entry.updated_at,
+    ...(cloudSync ? { metadata: { cloud_sync: cloudSync } } : {}),
     latest_revision: rev,
   };
 }
@@ -537,7 +557,7 @@ export function validateLocalContent(
     const p = c.pours[i]!;
     if (!(Number(p.ml) > 0)) return { valid: false, message: `pour ${i + 1}: ml` };
   }
-  return { valid: true, content };
+  return { valid: true, content: applyCoffeeGrinderRpm(c) };
 }
 
 /** Fallback coffee shape when catalog is empty (no App seed bundled). */
