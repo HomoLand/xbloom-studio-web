@@ -62,7 +62,7 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Run backend tests
         working-directory: xbloom-studio-web/backend
-        run: pytest tests -q
+        run: python -m pytest tests -q
 
   frontend-container:
     runs-on: ubuntu-latest
