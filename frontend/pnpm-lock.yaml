@@ -4,6 +4,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  picomatch: npm:@ryotsu/picomatch@4.0.7-a
+  fdir@6.5.0>picomatch: ^3 || ^4 || 4.0.7-a
+
 importers:
 
   .:
@@ -452,6 +456,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@ryotsu/picomatch@4.0.7-a':
+    resolution: {integrity: sha512-JroBFEmaejC7szGSfqOhF1QZHLKvX2wTA1+fWyfkpy3BjzdQKNPLKa2FtgeKVUDy5/UPUNkXEeCHJ5ZRBMLTVA==}
+    engines: {node: '>=12'}
+
   '@tailwindcss/node@4.3.3':
     resolution: {integrity: sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg==}
 
@@ -631,7 +639,7 @@ packages:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
     peerDependencies:
-      picomatch: ^3 || ^4
+      picomatch: ^3 || ^4 || 4.0.7-a
     peerDependenciesMeta:
       picomatch:
         optional: true
@@ -769,10 +777,6 @@ packages:
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
-
-  picomatch@4.0.5:
-    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
-    engines: {node: '>=12'}
 
   playwright-core@1.55.1:
     resolution: {integrity: sha512-Z6Mh9mkwX+zxSlHqdr5AOcJnfp+xUWLCt9uKV18fhzA8eyxUd8NUWzAjxUh55RZKSYwDGX0cfaySdhZJGMoJ+w==}
@@ -1199,6 +1203,8 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.62.2':
     optional: true
 
+  '@ryotsu/picomatch@4.0.7-a': {}
+
   '@tailwindcss/node@4.3.3':
     dependencies:
       '@jridgewell/remapping': 2.3.5
@@ -1372,9 +1378,9 @@ snapshots:
 
   escalade@3.2.0: {}
 
-  fdir@6.5.0(picomatch@4.0.5):
+  fdir@6.5.0(@ryotsu/picomatch@4.0.7-a):
     optionalDependencies:
-      picomatch: 4.0.5
+      picomatch: '@ryotsu/picomatch@4.0.7-a'
 
   fsevents@2.3.2:
     optional: true
@@ -1463,8 +1469,6 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@4.0.5: {}
-
   playwright-core@1.55.1: {}
 
   playwright@1.55.1:
@@ -1551,8 +1555,8 @@ snapshots:
 
   tinyglobby@0.2.17:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.5)
-      picomatch: 4.0.5
+      fdir: 6.5.0(@ryotsu/picomatch@4.0.7-a)
+      picomatch: '@ryotsu/picomatch@4.0.7-a'
 
   typescript@5.9.3: {}
 
@@ -1565,8 +1569,8 @@ snapshots:
   vite@6.4.4(jiti@2.7.0)(lightningcss@1.32.0):
     dependencies:
       esbuild: 0.25.12
-      fdir: 6.5.0(picomatch@4.0.5)
-      picomatch: 4.0.5
+      fdir: 6.5.0(@ryotsu/picomatch@4.0.7-a)
+      picomatch: '@ryotsu/picomatch@4.0.7-a'
       postcss: 8.5.33
       rollup: 4.62.2
       tinyglobby: 0.2.17
