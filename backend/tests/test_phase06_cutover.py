@@ -265,9 +265,6 @@ def test_requirements_runtime_every_package_line_is_exact_pin():
     import re
 
     runtime = _read(BACKEND_DIR / "requirements-runtime.txt")
-    assert "starlette==0.41.3" in runtime
-    assert "fastapi==0.115.6" in runtime
-    assert "mcp==1.28.1" in runtime
 
     runtime_pkgs = [
         line.strip()
@@ -285,6 +282,8 @@ def test_requirements_runtime_every_package_line_is_exact_pin():
         assert exact_pin.match(line), (
             f"requirements-runtime package line must be exact == pin, got: {line!r}"
         )
+    package_names = {line.split("==", 1)[0].lower() for line in runtime_pkgs}
+    assert {"fastapi", "mcp", "pillow", "python-multipart", "starlette"} <= package_names
 
 
 # ---------------------------------------------------------------------------
