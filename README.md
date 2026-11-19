@@ -118,7 +118,7 @@ pnpm install
 ```powershell
 pip install -e "C:\path\to\xbloom-studio-brew\packages\core"
 pip install -r requirements-runtime.txt
-pip install pytest==8.3.5
+pip install pytest==9.0.3
 ```
 
 ## 运行
